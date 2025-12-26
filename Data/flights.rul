@@ -1,2 +1,2 @@
 INIT Date TODAY()
-CHECK Date !BLANK(Date)
+CHECK From !BLANK(From)

@@ -97,9 +97,31 @@ function parseValue(value, type) {
   }
 }
 
-async function loadCSVFiles() {
+async function loadCSVFiles(resetTables = false) {
   await logAction('Loading CSV files from data directory');
-  tables = {};
+  
+  // Save in-memory tables that don't have corresponding files
+  const inMemoryTables = {};
+  if (!resetTables) {
+    for (const [name, table] of Object.entries(tables)) {
+      // Check if this table has a corresponding file
+      const expectedFile = path.join(DATA_DIR, table.originalFile);
+      try {
+        await fs.access(expectedFile);
+        // File exists, will be reloaded from disk
+      } catch {
+        // File doesn't exist, preserve this in-memory table
+        inMemoryTables[name] = table;
+      }
+    }
+  }
+  
+  // Reset tables if requested, otherwise start with in-memory tables
+  if (resetTables) {
+    tables = {};
+  } else {
+    tables = inMemoryTables;
+  }
   
   try {
     const files = await fs.readdir(DATA_DIR);
@@ -113,7 +135,9 @@ async function loadCSVFiles() {
       if (lines.length === 0) continue;
       
       const schema = parseSchema(lines[0]);
-      const tableName = path.basename(file, '.CSV');
+      // Strip .csv/.CSV extension from filename to get table name (case-insensitive)
+      const fileName = path.basename(file);
+      const tableName = fileName.replace(/\.(csv|CSV)$/i, '');
       const rows = [];
       
       for (let i = 1; i < lines.length; i++) {
@@ -196,7 +220,10 @@ class ExpressionEvaluator {
       return condResult && condResult !== 0 ? this._evaluateExpression(trueExpr) : this._evaluateExpression(falseExpr);
     }
     
-    // Handle parentheses
+    // Handle function calls FIRST (before parentheses processing)
+    expr = this._handleFunctions(expr);
+    
+    // Handle parentheses (but skip if they were part of function calls)
     depth = 0;
     let start = -1;
     for (let i = 0; i < expr.length; i++) {
@@ -219,9 +246,6 @@ class ExpressionEvaluator {
       throw new Error('Mismatched parentheses');
     }
     
-    // Handle function calls
-    expr = this._handleFunctions(expr);
-    
     // Handle field references
     expr = this._handleFieldReferences(expr);
     
@@ -243,12 +267,24 @@ class ExpressionEvaluator {
       'BLANK': (field) => {
         // Field can be a field name string or already evaluated value
         let val;
-        if (typeof field === 'string' && !field.startsWith('"')) {
-          val = this._getFieldValue(field);
+        if (typeof field === 'string') {
+          // If it's a quoted string, extract the content
+          if (field.startsWith('"') && field.endsWith('"')) {
+            val = field.slice(1, -1);
+          } else {
+            // Try to get field value by name
+            val = this._getFieldValue(field);
+            // If field not found, treat the string itself as the value
+            if (val === null) {
+              val = field;
+            }
+          }
         } else {
-          val = typeof field === 'string' && field.startsWith('"') ? field.slice(1, -1) : field;
+          val = field;
         }
-        return (val === '' || val === null || val === undefined || val === 0) ? 1 : 0;
+        // Check if blank: empty string, null, undefined, or 0
+        const isBlank = (val === '' || val === null || val === undefined || val === 0);
+        return isBlank ? 1 : 0;
       },
       'TODAY': () => {
         const now = new Date();
@@ -286,15 +322,20 @@ class ExpressionEvaluator {
       iterations++;
       
       for (const [funcName, func] of Object.entries(functions)) {
-        // Match function calls with proper nesting
-        const regex = new RegExp(`${funcName}\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)`, 'gi');
+        // Match function calls - handle both with and without arguments
+        // Pattern: FUNC_NAME(optional_args) - case insensitive, word boundary before function name
+        const regex = new RegExp(`\\b${funcName}\\s*\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)`, 'gi');
+        let foundMatch = false;
         const newExpr = expr.replace(regex, (match, args) => {
+          foundMatch = true;
           changed = true;
-          const argList = this._parseFunctionArgs(args);
+          // Handle empty arguments (like TODAY())
+          const trimmedArgs = args ? args.trim() : '';
+          const argList = trimmedArgs ? this._parseFunctionArgs(trimmedArgs) : [];
           const result = func(...argList);
           return typeof result === 'string' ? `"${result}"` : String(result);
         });
-        if (newExpr !== expr) {
+        if (foundMatch && newExpr !== expr) {
           expr = newExpr;
           break;
         }
@@ -344,17 +385,24 @@ class ExpressionEvaluator {
     if (current.trim()) result.push(current.trim());
     
     return result.map(arg => {
-      // Try to evaluate as expression, or return as string
-      try {
-        const evaluated = this._evaluateExpression(arg);
-        return evaluated;
-      } catch {
-        // If evaluation fails, try to return the field value if it's a field name
-        const fieldValue = this._getFieldValue(arg);
-        if (fieldValue !== null) {
+      const trimmedArg = typeof arg === 'string' ? arg.trim() : String(arg);
+      
+      // If it's a simple field name (identifier, not quoted, not a number, not an expression)
+      if (trimmedArg.match(/^[A-Za-z_][A-Za-z0-9_]*$/) && !trimmedArg.startsWith('"')) {
+        // Try to get field value directly
+        const fieldValue = this._getFieldValue(trimmedArg);
+        if (fieldValue !== null && fieldValue !== undefined) {
           return fieldValue;
         }
-        return arg;
+      }
+      
+      // Try to evaluate as expression, or return as string
+      try {
+        const evaluated = this._evaluateExpression(trimmedArg);
+        return evaluated;
+      } catch {
+        // If evaluation fails, return the argument as-is
+        return trimmedArg;
       }
     });
   }
@@ -417,11 +465,28 @@ class ExpressionEvaluator {
   }
   
   _handleBooleanOps(expr) {
-    // Handle ! (NOT)
-    expr = expr.replace(/!(\d+(?:\.\d+)?|"[^"]*")/g, (match, val) => {
-      const num = this._toNumber(val);
-      return num ? 0 : 1;
-    });
+    // Handle ! (NOT) - match numbers, quoted strings, or function results
+    // Process iteratively to handle all ! operators
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 100) {
+      changed = false;
+      iterations++;
+      // Match ! followed by a number (with optional decimal), quoted string, or standalone number
+      // This handles both !1 and !"1" cases
+      const notRegex = /!(\d+(?:\.\d+)?|"[^"]*")/g;
+      const newExpr = expr.replace(notRegex, (match, val) => {
+        changed = true;
+        const num = this._toNumber(val);
+        // If num is truthy (non-zero), return 0 (false), else return 1 (true)
+        return num ? 0 : 1;
+      });
+      if (newExpr !== expr) {
+        expr = newExpr;
+      } else {
+        break;
+      }
+    }
     
     // Handle && (AND) - need to be careful with order
     const andRegex = /(\d+(?:\.\d+)?|"[^"]*")\s*&&\s*(\d+(?:\.\d+)?|"[^"]*")/g;
@@ -472,12 +537,23 @@ class ExpressionEvaluator {
   }
   
   _handleArithmetic(expr) {
-    // Handle exponentiation
+    // Protect quoted strings from arithmetic operations
+    const protectedStrings = [];
+    let protectedIndex = 0;
+    
+    expr = expr.replace(/"([^"]*)"/g, (match, content) => {
+      const key = `__STRING_${protectedIndex}__`;
+      protectedStrings[protectedIndex] = match;
+      protectedIndex++;
+      return key;
+    });
+    
+    // Handle exponentiation (only on numbers, not protected strings)
     expr = expr.replace(/(\d+(?:\.\d+)?)\s*\^\s*(\d+(?:\.\d+)?)/g, (match, left, right) => {
       return Math.pow(parseFloat(left), parseFloat(right));
     });
     
-    // Handle multiplication and division
+    // Handle multiplication and division (only on numbers, not protected strings)
     expr = expr.replace(/(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)/g, (match, left, right) => {
       return parseFloat(left) * parseFloat(right);
     });
@@ -486,7 +562,7 @@ class ExpressionEvaluator {
       return parseFloat(left) / parseFloat(right);
     });
     
-    // Handle addition and subtraction
+    // Handle addition and subtraction (only on numbers, not protected strings)
     expr = expr.replace(/(\d+(?:\.\d+)?)\s*\+\s*(\d+(?:\.\d+)?)/g, (match, left, right) => {
       return parseFloat(left) + parseFloat(right);
     });
@@ -495,13 +571,18 @@ class ExpressionEvaluator {
       return parseFloat(left) - parseFloat(right);
     });
     
+    // Restore protected strings
+    for (let i = 0; i < protectedStrings.length; i++) {
+      expr = expr.replace(`__STRING_${i}__`, protectedStrings[i]);
+    }
+    
     // Clean up string quotes and convert to number if possible
     if (expr.startsWith('"') && expr.endsWith('"')) {
       return expr.slice(1, -1);
     }
     
     const num = parseFloat(expr);
-    if (!isNaN(num)) {
+    if (!isNaN(num) && expr.trim() === String(num)) {
       return num;
     }
     
@@ -550,12 +631,23 @@ app.post('/api/restart', async (req, res) => {
   await logAction('Restart requested');
   tables = {};
   commandLoggingEnabled = false;
-  const result = await loadCSVFiles();
+  const result = await loadCSVFiles(true); // Reset tables on restart
   res.json({ success: true, message: 'Restarted' });
 });
 
 app.post('/api/command', async (req, res) => {
-  const { command, params, tableName } = req.body;
+  let { command, params, tableName } = req.body;
+  
+  // Normalize table names (remove .csv/.CSV extension if present)
+  if (tableName) {
+    tableName = tableName.replace(/\.(csv|CSV)$/i, '');
+  }
+  if (params && params.tableName1) {
+    params.tableName1 = params.tableName1.replace(/\.(csv|CSV)$/i, '');
+  }
+  if (params && params.newName) {
+    params.newName = params.newName.replace(/\.(csv|CSV)$/i, '');
+  }
   
   try {
     await logAction(`Command: ${command} on table: ${tableName} with params: ${JSON.stringify(params)}`);
@@ -591,7 +683,14 @@ app.post('/api/command', async (req, res) => {
         result = await joinTable(tableName, params.tableName1, params.joinColumn);
         break;
       case 'COPY_TABLE':
-        result = await copyTable(tableName, params.newName);
+        if (!tableName) {
+          result = { success: false, error: 'Source table name is required' };
+        } else if (!params || !params.newName) {
+          result = { success: false, error: 'New table name is required' };
+        } else {
+          await logAction(`COPY_TABLE: copying from ${tableName} to ${params.newName}`);
+          result = await copyTable(tableName, params.newName);
+        }
         break;
       case 'SORT_TABLE':
         result = await sortTable(tableName, params.columnName, params.order);
@@ -789,17 +888,43 @@ async function addColumn(tableName, columnName, expression) {
   const table = tables[tableName];
   
   // Determine type from expression evaluation
-  const evaluator = new ExpressionEvaluator(table.rows[0] || {}, tables, tableName);
-  let sampleResult;
-  try {
-    sampleResult = evaluator.evaluate(expression);
-  } catch (error) {
-    return { success: false, error: `Expression error: ${error.message}` };
+  // Check multiple rows to see if result is always integer or could be real
+  const evaluator = new ExpressionEvaluator(null, tables, tableName);
+  let colType = 'TEXT';
+  let hasNonInteger = false;
+  let hasNumber = false;
+  
+  // Check up to 10 sample rows to determine type
+  const sampleSize = Math.min(10, table.rows.length);
+  for (let i = 0; i < sampleSize; i++) {
+    evaluator.row = table.rows[i];
+    try {
+      const sampleResult = evaluator.evaluate(expression);
+      if (typeof sampleResult === 'number') {
+        hasNumber = true;
+        if (!Number.isInteger(sampleResult)) {
+          hasNonInteger = true;
+          break; // Found a non-integer, definitely REAL
+        }
+      }
+    } catch (error) {
+      // Skip rows that cause errors, they'll be handled during full evaluation
+    }
   }
   
-  let colType = 'TEXT';
-  if (typeof sampleResult === 'number') {
-    colType = Number.isInteger(sampleResult) ? 'INT' : 'REAL';
+  // Also check if expression involves REAL columns by checking if it contains division or references REAL columns
+  if (hasNumber && !hasNonInteger) {
+    // Check if expression might produce REAL values (contains division, or references REAL columns)
+    const hasDivision = expression.includes('/');
+    const hasRealColumns = checkExpressionForRealColumns(expression, table);
+    
+    if (hasDivision || hasRealColumns) {
+      hasNonInteger = true; // Treat as REAL if division or REAL columns are involved
+    }
+  }
+  
+  if (hasNumber) {
+    colType = hasNonInteger ? 'REAL' : 'INT';
   }
   
   table.schema.push({ name: columnName, type: colType });
@@ -811,6 +936,20 @@ async function addColumn(tableName, columnName, expression) {
   }
   
   return { success: true, table: serializeTable(table) };
+}
+
+// Helper function to check if expression references REAL columns
+function checkExpressionForRealColumns(expression, table) {
+  for (const col of table.schema) {
+    if (col.type === 'REAL') {
+      // Check if column name appears in expression (as a word boundary)
+      const regex = new RegExp(`\\b${col.name}\\b`);
+      if (regex.test(expression)) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 async function joinTable(tableName, tableName1, joinColumn) {
@@ -869,8 +1008,19 @@ async function joinTable(tableName, tableName1, joinColumn) {
 }
 
 async function copyTable(tableName, newName) {
+  if (!tableName) {
+    return { success: false, error: 'Source table name is required' };
+  }
+  if (!newName) {
+    return { success: false, error: 'New table name is required' };
+  }
+  
+  // Log available tables for debugging
+  const availableTables = Object.keys(tables);
+  await logAction(`COPY_TABLE: Looking for source table "${tableName}". Available tables: ${availableTables.join(', ')}`);
+  
   if (!tables[tableName]) {
-    return { success: false, error: `Table ${tableName} not found` };
+    return { success: false, error: `Table ${tableName} not found. Available tables: ${availableTables.join(', ')}` };
   }
   
   if (tables[newName]) {
@@ -884,7 +1034,8 @@ async function copyTable(tableName, newName) {
     originalFile: `${newName}.CSV`
   };
   
-  return { success: true };
+  await logAction(`Copied table ${tableName} to ${newName}`);
+  return { success: true, newTableName: newName, table: serializeTable(tables[newName]) };
 }
 
 async function sortTable(tableName, columnName, order) {
@@ -933,9 +1084,28 @@ function serializeTable(table) {
 
 // Rules engine
 async function loadRules(fileName) {
-  const rulesPath = path.join(DATA_DIR, `${fileName}.RUL`);
+  // Try both .RUL and .rul extensions (case-insensitive)
+  const rulesPathUpper = path.join(DATA_DIR, `${fileName}.RUL`);
+  const rulesPathLower = path.join(DATA_DIR, `${fileName}.rul`);
+  
+  let content = null;
+  let rulesPath = null;
+  
   try {
-    const content = await fs.readFile(rulesPath, 'utf-8');
+    try {
+      content = await fs.readFile(rulesPathUpper, 'utf-8');
+      rulesPath = rulesPathUpper;
+    } catch {
+      try {
+        content = await fs.readFile(rulesPathLower, 'utf-8');
+        rulesPath = rulesPathLower;
+      } catch {
+        // File doesn't exist, return empty rules
+        return [];
+      }
+    }
+    
+    await logAction(`Loading rules from ${rulesPath}`);
     const lines = content.split(/\r?\n/).filter(line => line.trim() !== '');
     const rules = [];
     
@@ -962,11 +1132,14 @@ async function loadRules(fileName) {
           columnName,
           expression
         });
+        await logAction(`Parsed rule: ${operation} ${columnName} ${expression}`);
       }
     }
     
+    await logAction(`Loaded ${rules.length} rules from ${rulesPath}`);
     return rules;
   } catch (error) {
+    await logError(`Failed to load rules from ${rulesPath || fileName}`, error);
     return [];
   }
 }
@@ -1049,29 +1222,130 @@ app.get('/api/commands/replay', async (req, res) => {
     const commands = [];
     
     for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 1) {
-        const command = parts[0];
-        const tableName = parts[1] || '';
-        let params = {};
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      
+      // Format is: command tableName JSON_PARAMS
+      // Find the first two spaces to separate command, tableName, and JSON
+      const firstSpace = trimmed.indexOf(' ');
+      if (firstSpace === -1) continue;
+      
+      const command = trimmed.substring(0, firstSpace);
+      const rest = trimmed.substring(firstSpace + 1).trim();
+      
+      // Find the start of JSON (should start with {)
+      const jsonStart = rest.indexOf('{');
+      let tableName = '';
+      let params = {};
+      
+      if (jsonStart === -1) {
+        // No JSON found, rest is tableName (or empty)
+        tableName = rest;
+      } else {
+        // Extract tableName (everything before JSON)
+        tableName = rest.substring(0, jsonStart).trim();
+        
+        // Extract and parse JSON
         try {
-          if (parts.length > 2) {
-            params = JSON.parse(parts.slice(2).join(' '));
+          // Find the matching closing brace
+          let braceCount = 0;
+          let jsonEnd = -1;
+          for (let i = jsonStart; i < rest.length; i++) {
+            if (rest[i] === '{') braceCount++;
+            else if (rest[i] === '}') {
+              braceCount--;
+              if (braceCount === 0) {
+                jsonEnd = i + 1;
+                break;
+              }
+            }
           }
-        } catch {
-          // Ignore parse errors
+          
+          if (jsonEnd > jsonStart) {
+            const jsonStr = rest.substring(jsonStart, jsonEnd);
+            params = JSON.parse(jsonStr);
+          }
+        } catch (error) {
+          // If JSON parsing fails, params remains {}
+          await logError('Failed to parse command params JSON', error);
         }
-        commands.push({ command, tableName, params });
       }
+      
+      // Normalize table names (remove .csv/.CSV extension if present)
+      const normalizedTableName = tableName ? tableName.replace(/\.(csv|CSV)$/i, '') : '';
+      if (params && params.tableName1) {
+        params.tableName1 = params.tableName1.replace(/\.(csv|CSV)$/i, '');
+      }
+      if (params && params.newName) {
+        params.newName = params.newName.replace(/\.(csv|CSV)$/i, '');
+      }
+      
+      commands.push({ command, tableName: normalizedTableName, params });
     }
     
     res.json({ success: true, commands });
   } catch (error) {
+    // If file doesn't exist or can't be read, return empty commands
     res.json({ success: true, commands: [] });
   }
 });
 
 // Row operations
+// Get initialized row data (for Add Row dialog)
+app.get('/api/row/init/:tableName', async (req, res) => {
+  const { tableName } = req.params;
+  
+  try {
+    if (!tables[tableName]) {
+      return res.json({ success: false, error: `Table ${tableName} not found` });
+    }
+    
+    const table = tables[tableName];
+    // Get filename without extension (case-insensitive)
+    const fileName = path.basename(table.originalFile, path.extname(table.originalFile));
+    await logAction(`Initializing row for table ${tableName}, originalFile: ${table.originalFile}, fileName: ${fileName}`);
+    
+    // Initialize row with default values
+    const row = {};
+    for (const col of table.schema) {
+      switch (col.type) {
+        case 'INT':
+          row[col.name] = 0;
+          break;
+        case 'REAL':
+          row[col.name] = 0.0;
+          break;
+        default:
+          row[col.name] = '';
+      }
+    }
+    
+    // Run INIT rules
+    const rules = await loadRules(fileName);
+    await logAction(`Loading rules for ${fileName}, found ${rules.length} rules`);
+    const initRules = rules.filter(r => r.operation === 'INIT');
+    await logAction(`Found ${initRules.length} INIT rules`);
+    const evaluator = new ExpressionEvaluator(row, tables, tableName);
+    
+    for (const rule of initRules) {
+      try {
+        await logAction(`Executing INIT rule: ${rule.columnName} = ${rule.expression}`);
+        const value = evaluator.evaluate(rule.expression);
+        await logAction(`INIT rule result: ${rule.columnName} = ${value}`);
+        row[rule.columnName] = value;
+      } catch (error) {
+        await logError(`Failed to execute INIT rule for ${rule.columnName}`, error);
+        // Continue with other rules
+      }
+    }
+    
+    res.json({ success: true, row });
+  } catch (error) {
+    await logError('Failed to initialize row', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/api/row/add', async (req, res) => {
   const { tableName, row } = req.body;
   
@@ -1081,7 +1355,9 @@ app.post('/api/row/add', async (req, res) => {
     }
     
     const table = tables[tableName];
-    const fileName = path.basename(table.originalFile, '.CSV');
+    // Get filename without extension (case-insensitive)
+    const fileName = path.basename(table.originalFile, path.extname(table.originalFile));
+    await logAction(`Adding row to table ${tableName}, originalFile: ${table.originalFile}, fileName: ${fileName}`);
     
     // Initialize row with default values if not provided
     for (const col of table.schema) {
@@ -1099,21 +1375,11 @@ app.post('/api/row/add', async (req, res) => {
       }
     }
     
-    // Run INIT rules
-    const rules = await loadRules(fileName);
-    const initRules = rules.filter(r => r.operation === 'INIT');
-    const evaluator = new ExpressionEvaluator(row, tables, tableName);
-    
-    for (const rule of initRules) {
-      try {
-        const value = evaluator.evaluate(rule.expression);
-        row[rule.columnName] = value;
-      } catch (error) {
-        // Continue with other rules
-      }
-    }
-    
     // Validate types
+    const rules = await loadRules(fileName);
+    await logAction(`Loaded ${rules.length} rules for table ${tableName} when adding row, fileName: ${fileName}`);
+    await logAction(`Rules found: ${rules.map(r => `${r.operation} ${r.columnName}`).join(', ')}`);
+    const evaluator = new ExpressionEvaluator(row, tables, tableName);
     const errors = [];
     for (const col of table.schema) {
       const value = row[col.name];
@@ -1154,19 +1420,27 @@ app.post('/api/row/add', async (req, res) => {
     
     // Run CHECK rules
     const checkRules = rules.filter(r => r.operation === 'CHECK');
+    await logAction(`Running ${checkRules.length} CHECK rules for table ${tableName}`);
     for (const rule of checkRules) {
       try {
         evaluator.row = row;
+        await logAction(`Executing CHECK rule: ${rule.columnName} - expression: ${rule.expression}, current value: ${row[rule.columnName]}`);
         const result = evaluator.evaluate(rule.expression);
+        await logAction(`CHECK rule result for ${rule.columnName}: ${result} (type: ${typeof result}, truthy: ${!!result})`);
         if (!result || result === 0) {
+          await logAction(`CHECK rule FAILED for ${rule.columnName}: expression returned ${result}`);
           errors.push(rule.columnName);
+        } else {
+          await logAction(`CHECK rule PASSED for ${rule.columnName}`);
         }
       } catch (error) {
+        await logError(`CHECK rule error for ${rule.columnName}`, error);
         errors.push(rule.columnName);
       }
     }
     
     if (errors.length > 0) {
+      await logAction(`Row add failed with ${errors.length} errors: ${errors.join(', ')}`);
       return res.json({ success: false, errors });
     }
     
@@ -1290,6 +1564,18 @@ app.post('/api/row/delete', async (req, res) => {
 // Start server
 async function startServer() {
   await ensureDataDir();
+  
+  // Delete and recreate main.log file on startup
+  try {
+    await fs.unlink(MAIN_LOG).catch(() => {
+      // File doesn't exist, that's okay
+    });
+    // Create empty log file
+    await fs.writeFile(MAIN_LOG, '', 'utf-8');
+  } catch (error) {
+    console.error('Failed to initialize log file:', error);
+  }
+  
   await logAction('Server starting');
   
   app.listen(PORT, () => {

@@ -9,9 +9,10 @@ re-initializing everything, as tough the program was being started for the first
 
 
 The CSV files will be located in a directory called "data",located in the program's home directory.
-All files with extension ".CSV" should be loaded.
+All files with extension ".CSV" should be loaded. 
 The first line of a CSV file will give the schema in form "columnName:columnType", with columnType being
 either "TEXT", "INT", "REAL". If no type is given, assume TEXT. 
+The names of tables should be that of the corresponding file with the CSV extension stripped off.
 
 Any line of the CSV file which is longer than number of columns in the schema should be truncated,
 shorter lines should be filled out using default values: '' for TEXT, 0 for INT, 0.0 for REAL.
@@ -20,7 +21,8 @@ When in memory, store the fields of the lines of data, according to their types,
 
 The program should read the CSV files in and display them in tabular form, with drop down to switch between tables.
 When displaying data of type REAL, only show 2 digits of precision. The tables should be horizontally scrollable
-if all columns cannot be fitted into the current view. The horizontal scroll base should appear at the top of the table.
+if all columns cannot be fitted into the current view. The horizontal scroll bar should appear at the top of the table,
+andbe synchronized with the horizontal scrollbar at the bottom.
 
 The program should log all actions and errors to a "main.log" file, and write that file out when an entry is made.
 Ensure that all user commands defined below aer logged with their parameters and success or failure.

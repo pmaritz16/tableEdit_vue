@@ -71,10 +71,14 @@ createApp({
       }
     }
   },
-  mounted() {
-    this.loadTables();
+  async mounted() {
     this.checkLoggingStatus();
-    this.replayCommands();
+    await this.loadTables();
+    await this.replayCommands();
+    // Update table width on window resize
+    window.addEventListener('resize', () => {
+      this.updateTableWidth();
+    });
   },
   methods: {
     async loadTables() {
@@ -82,8 +86,16 @@ createApp({
         const response = await fetch('/api/tables');
         const data = await response.json();
         if (data.success) {
-          this.tables = data.tables;
-          this.tableNames = Object.keys(data.tables);
+          // Merge server tables with any in-memory tables (like copied tables)
+          const serverTables = data.tables;
+          // Preserve any tables that exist in memory but not on disk
+          for (const [name, table] of Object.entries(this.tables)) {
+            if (!serverTables[name]) {
+              serverTables[name] = table;
+            }
+          }
+          this.tables = serverTables;
+          this.tableNames = Object.keys(this.tables);
           if (this.tableNames.length > 0 && !this.currentTable) {
             this.currentTable = this.tableNames[0];
             this.onTableChange();
@@ -103,18 +115,30 @@ createApp({
       }
     },
     updateTableWidth() {
-      if (this.$refs.tableContent) {
-        const table = this.$refs.tableContent.querySelector('table');
-        if (table) {
-          this.tableWidth = table.scrollWidth;
+      this.$nextTick(() => {
+        if (this.$refs.tableContent) {
+          const table = this.$refs.tableContent.querySelector('table');
+          if (table) {
+            this.tableWidth = table.scrollWidth;
+            // Ensure both scrollbars have the same scrollable width
+            if (this.$refs.topScrollbar) {
+              const spacer = this.$refs.topScrollbar.querySelector('div');
+              if (spacer) {
+                spacer.style.width = table.scrollWidth + 'px';
+              }
+            }
+          }
         }
+      });
+    },
+    syncScrollTop(event) {
+      if (this.$refs.tableContent) {
+        this.$refs.tableContent.scrollLeft = event.target.scrollLeft;
       }
     },
-    syncScroll(event) {
-      const source = event.target;
-      const target = source === this.$refs.topScrollbar ? this.$refs.tableContent : this.$refs.topScrollbar;
-      if (target) {
-        target.scrollLeft = source.scrollLeft;
+    syncScrollBottom(event) {
+      if (this.$refs.topScrollbar) {
+        this.$refs.topScrollbar.scrollLeft = event.target.scrollLeft;
       }
     },
     formatReal(value) {
@@ -161,7 +185,25 @@ createApp({
         const data = await response.json();
         if (data.success) {
           this.commandSuccess = 'Command executed successfully';
-          if (data.table) {
+          
+          // Handle new table creation (e.g., COPY_TABLE, COLLAPSE_TABLE) BEFORE reloading
+          if (data.newTableName) {
+            // Ensure the table data is set before switching to it
+            if (data.table) {
+              this.tables[data.newTableName] = data.table;
+            }
+            this.tableNames = Object.keys(this.tables);
+            // Optionally switch to the new table
+            if (this.selectedCommand === 'COPY_TABLE' && data.table) {
+              this.currentTable = data.newTableName;
+              this.currentTableData = data.table;
+              this.$nextTick(() => {
+                this.updateTableWidth();
+              });
+            }
+          }
+          
+          if (data.table && !data.newTableName) {
             this.currentTableData = data.table;
             this.tables[this.currentTable] = data.table;
             this.$nextTick(() => {
@@ -173,9 +215,16 @@ createApp({
             this.tableNames = Object.keys(this.tables);
             this.onTableChange();
           }
+          
+          // Only reload tables if it's not a COPY_TABLE (which creates in-memory only tables)
           setTimeout(() => {
             this.closeCommandModal();
-            this.loadTables();
+            if (this.selectedCommand !== 'COPY_TABLE') {
+              this.loadTables();
+            } else {
+              // For COPY_TABLE, just refresh the table list without reloading from disk
+              this.tableNames = Object.keys(this.tables);
+            }
           }, 1000);
         } else {
           this.commandError = data.error || 'Command failed';
@@ -185,24 +234,65 @@ createApp({
       }
     },
     async addRow() {
-      if (!this.currentTableData) return;
+      if (!this.currentTableData || !this.currentTable) return;
       
       this.rowModalMode = 'add';
       this.rowData = {};
       this.rowErrors = [];
       this.rowError = '';
       
-      // Initialize with default values
-      for (const col of this.currentTableData.schema) {
-        switch (col.type) {
-          case 'INT':
-            this.rowData[col.name] = '0';
-            break;
-          case 'REAL':
-            this.rowData[col.name] = '0.0';
-            break;
-          default:
-            this.rowData[col.name] = '';
+      // Get initialized row from server (with INIT rules applied)
+      try {
+        const response = await fetch(`/api/row/init/${this.currentTable}`);
+        const data = await response.json();
+        if (data.success && data.row) {
+          // Convert values to strings for editing
+          for (const col of this.currentTableData.schema) {
+            if (data.row[col.name] !== undefined) {
+              this.rowData[col.name] = String(data.row[col.name]);
+            } else {
+              // Fallback to defaults if not in response
+              switch (col.type) {
+                case 'INT':
+                  this.rowData[col.name] = '0';
+                  break;
+                case 'REAL':
+                  this.rowData[col.name] = '0.0';
+                  break;
+                default:
+                  this.rowData[col.name] = '';
+              }
+            }
+          }
+        } else {
+          // Fallback to default initialization if API fails
+          for (const col of this.currentTableData.schema) {
+            switch (col.type) {
+              case 'INT':
+                this.rowData[col.name] = '0';
+                break;
+              case 'REAL':
+                this.rowData[col.name] = '0.0';
+                break;
+              default:
+                this.rowData[col.name] = '';
+            }
+          }
+        }
+      } catch (error) {
+        // Fallback to default initialization if API fails
+        console.error('Failed to get initialized row:', error);
+        for (const col of this.currentTableData.schema) {
+          switch (col.type) {
+            case 'INT':
+              this.rowData[col.name] = '0';
+              break;
+            case 'REAL':
+              this.rowData[col.name] = '0.0';
+              break;
+            default:
+              this.rowData[col.name] = '';
+          }
         }
       }
       
@@ -347,6 +437,7 @@ createApp({
           this.selectedRowIndex = null;
           this.selectedCommand = '';
           await this.loadTables();
+          await this.replayCommands();
           alert('Application restarted');
         }
       } catch (error) {
@@ -398,6 +489,7 @@ createApp({
         if (data.success && data.commands && data.commands.length > 0) {
           let errorOccurred = false;
           let successCount = 0;
+          let errorMessage = '';
           
           for (const cmd of data.commands) {
             if (errorOccurred) break;
@@ -409,32 +501,56 @@ createApp({
                 body: JSON.stringify({
                   command: cmd.command,
                   tableName: cmd.tableName,
-                  params: cmd.params
+                  params: cmd.params || {}
                 })
               });
               
               const cmdData = await cmdResponse.json();
               if (cmdData.success) {
                 successCount++;
+                // Update local table state if command returned table data
+                if (cmdData.table && cmd.tableName) {
+                  this.tables[cmd.tableName] = cmdData.table;
+                  if (this.currentTable === cmd.tableName) {
+                    this.currentTableData = cmdData.table;
+                    this.$nextTick(() => {
+                      this.updateTableWidth();
+                    });
+                  }
+                }
+                // Handle table name changes
+                if (cmdData.tableName && cmdData.tableName !== cmd.tableName) {
+                  this.tableNames = Object.keys(this.tables);
+                  if (this.currentTable === cmd.tableName) {
+                    this.currentTable = cmdData.tableName;
+                    this.onTableChange();
+                  }
+                }
               } else {
                 errorOccurred = true;
-                alert(`Error replaying command ${cmd.command}: ${cmdData.error}`);
+                errorMessage = `Error replaying command ${cmd.command}${cmd.tableName ? ' on table ' + cmd.tableName : ''}: ${cmdData.error || 'Unknown error'}`;
                 break;
               }
             } catch (error) {
               errorOccurred = true;
-              alert(`Error replaying command ${cmd.command}: ${error.message}`);
+              errorMessage = `Error replaying command ${cmd.command}${cmd.tableName ? ' on table ' + cmd.tableName : ''}: ${error.message}`;
               break;
             }
           }
           
-          if (!errorOccurred && successCount > 0) {
-            alert(`Successfully replayed ${successCount} commands`);
-            await this.loadTables();
+          // Reload all tables to ensure consistency
+          await this.loadTables();
+          
+          if (errorOccurred) {
+            alert(errorMessage);
+          } else if (successCount > 0) {
+            // Only show success message, don't use alert for non-errors
+            console.log(`Successfully replayed ${successCount} commands`);
           }
         }
       } catch (error) {
-        // No commands file or error reading - that's okay
+        // No commands file or error reading - that's okay, just log it
+        console.log('No commands file found or error reading commands file');
       }
     }
   }

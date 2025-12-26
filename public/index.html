@@ -89,24 +89,20 @@
       border-radius: 4px;
       overflow: hidden;
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .table-scroll-wrapper {
-      overflow-x: auto;
-      max-width: 100%;
+      display: flex;
+      flex-direction: column;
     }
     
     .table-scrollbar-top {
       overflow-x: auto;
       overflow-y: hidden;
-      height: 20px;
-      margin-bottom: -20px;
-      position: relative;
-      z-index: 1;
+      height: 17px;
+      border-bottom: 1px solid #ddd;
+      flex-shrink: 0;
     }
     
     .table-scrollbar-top::-webkit-scrollbar {
-      height: 20px;
+      height: 17px;
     }
     
     .table-scrollbar-top::-webkit-scrollbar-track {
@@ -115,11 +111,35 @@
     
     .table-scrollbar-top::-webkit-scrollbar-thumb {
       background: #888;
-      border-radius: 10px;
+      border-radius: 0;
+    }
+    
+    .table-scrollbar-top::-webkit-scrollbar-thumb:hover {
+      background: #555;
     }
     
     .table-content {
       overflow-x: auto;
+      overflow-y: auto;
+      flex: 1;
+    }
+    
+    .table-content::-webkit-scrollbar {
+      height: 17px;
+      width: 17px;
+    }
+    
+    .table-content::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    
+    .table-content::-webkit-scrollbar-thumb {
+      background: #888;
+      border-radius: 0;
+    }
+    
+    .table-content::-webkit-scrollbar-thumb:hover {
+      background: #555;
     }
     
     table {
@@ -326,10 +346,10 @@
     </div>
     
     <div class="table-container" v-if="currentTableData">
-      <div class="table-scrollbar-top" ref="topScrollbar" @scroll="syncScroll">
+      <div class="table-scrollbar-top" ref="topScrollbar" @scroll="syncScrollTop">
         <div :style="{ width: tableWidth + 'px', height: '1px' }"></div>
       </div>
-      <div class="table-content" ref="tableContent" @scroll="syncScroll">
+      <div class="table-content" ref="tableContent" @scroll="syncScrollBottom">
         <table>
           <thead>
             <tr>
@@ -488,4 +508,5 @@
   <script src="app.js"></script>
 </body>
 </html>
+
 
