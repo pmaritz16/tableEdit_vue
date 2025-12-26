@@ -13,6 +13,7 @@ All files with extension ".CSV" should be loaded.
 The first line of a CSV file will give the schema in form "columnName:columnType", with columnType being
 either "TEXT", "INT", "REAL". If no type is given, assume TEXT. 
 The names of tables should be that of the corresponding file with the CSV extension stripped off.
+The CSV parser should treat all fields enclosed in matching doubles quotes as single strings.
 
 Any line of the CSV file which is longer than number of columns in the schema should be truncated,
 shorter lines should be filled out using default values: '' for TEXT, 0 for INT, 0.0 for REAL.

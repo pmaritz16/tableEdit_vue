@@ -51,8 +51,49 @@ let tables = {};
 let commandLoggingEnabled = false;
 
 // CSV parsing functions
+function parseCSVLine(line) {
+  const fields = [];
+  let current = '';
+  let inQuotes = false;
+  let i = 0;
+  
+  while (i < line.length) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (inQuotes && i + 1 < line.length && line[i + 1] === '"') {
+        // Escaped quote ("")
+        current += '"';
+        i += 2;
+        continue;
+      } else {
+        // Toggle quote state
+        inQuotes = !inQuotes;
+        i++;
+        continue;
+      }
+    }
+    
+    if (char === ',' && !inQuotes) {
+      // Field separator
+      fields.push(current.trim());
+      current = '';
+      i++;
+      continue;
+    }
+    
+    current += char;
+    i++;
+  }
+  
+  // Add the last field
+  fields.push(current.trim());
+  
+  return fields;
+}
+
 function parseSchema(firstLine) {
-  const columns = firstLine.split(',').map(col => col.trim());
+  const columns = parseCSVLine(firstLine);
   const schema = [];
   
   for (const col of columns) {
@@ -141,12 +182,16 @@ async function loadCSVFiles(resetTables = false) {
       const rows = [];
       
       for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].split(',');
+        const fields = parseCSVLine(lines[i]);
         const row = {};
         
         for (let j = 0; j < schema.length; j++) {
           const col = schema[j];
-          let value = j < line.length ? line[j].trim() : '';
+          let value = j < fields.length ? fields[j] : '';
+          // Remove surrounding quotes if present
+          if (value.startsWith('"') && value.endsWith('"')) {
+            value = value.slice(1, -1).replace(/""/g, '"');
+          }
           value = parseValue(value, col.type);
           row[col.name] = value;
         }
@@ -311,6 +356,43 @@ class ExpressionEvaluator {
       },
       'UPPER': (str) => {
         return String(str).toUpperCase();
+      },
+      'TOTAL': (tableName, columnName) => {
+        // Get the table and sum all values in the specified column
+        if (!tableName || !columnName) {
+          return 0;
+        }
+        
+        // Remove quotes if present
+        const cleanTableName = typeof tableName === 'string' ? tableName.replace(/^"|"$/g, '') : String(tableName);
+        const cleanColumnName = typeof columnName === 'string' ? columnName.replace(/^"|"$/g, '') : String(columnName);
+        
+        const table = this.tables[cleanTableName];
+        if (!table) {
+          return 0;
+        }
+        
+        const col = table.schema.find(c => c.name === cleanColumnName);
+        if (!col) {
+          return 0;
+        }
+        
+        // Sum values based on column type
+        let total = 0;
+        for (const row of table.rows) {
+          const value = row[cleanColumnName];
+          if (value !== null && value !== undefined) {
+            if (col.type === 'INT' || col.type === 'REAL') {
+              const num = parseFloat(value);
+              if (!isNaN(num)) {
+                total += num;
+              }
+            }
+            // TEXT columns are ignored (total remains 0)
+          }
+        }
+        
+        return total;
       }
     };
     
@@ -724,6 +806,24 @@ async function saveTable(tableName) {
   const table = tables[tableName];
   const filePath = path.join(DATA_DIR, `${tableName}.CSV`);
   
+  // Helper function to escape CSV field
+  function escapeCSVField(value) {
+    // Handle null/undefined
+    if (value === null || value === undefined) {
+      return '';
+    }
+    
+    const str = String(value);
+    // If field contains comma, quote, or newline, wrap in quotes and escape quotes
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+      // Escape any existing quotes by doubling them
+      const escapedQuotes = str.replace(/"/g, '""');
+      // Wrap in quotes
+      return '"' + escapedQuotes + '"';
+    }
+    return str;
+  }
+  
   // Build CSV content
   const schemaLine = table.schema.map(col => `${col.name}:${col.type}`).join(',');
   const lines = [schemaLine];
@@ -733,13 +833,20 @@ async function saveTable(tableName) {
       let value = row[col.name];
       if (col.type === 'REAL' && typeof value === 'number') {
         value = value.toFixed(2);
+      } else if (value === null || value === undefined) {
+        value = '';
       }
-      return String(value);
+      const escaped = escapeCSVField(value);
+      // Ensure we don't accidentally trim quotes
+      return escaped;
     });
-    lines.push(values.join(','));
+    const line = values.join(',');
+    lines.push(line);
   }
   
   await fs.writeFile(filePath, lines.join('\n'), 'utf-8');
+  const absolutePath = path.resolve(filePath);
+  await logAction(`Saved table ${tableName} to file: ${absolutePath}`);
   return { success: true };
 }
 

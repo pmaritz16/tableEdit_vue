@@ -216,13 +216,16 @@ createApp({
             this.onTableChange();
           }
           
-          // Only reload tables if it's not a COPY_TABLE (which creates in-memory only tables)
+          // Update table list if needed (for new tables)
+          if (data.newTableName) {
+            this.tableNames = Object.keys(this.tables);
+          }
+          
           setTimeout(() => {
             this.closeCommandModal();
-            if (this.selectedCommand !== 'COPY_TABLE') {
-              this.loadTables();
-            } else {
-              // For COPY_TABLE, just refresh the table list without reloading from disk
+            // Don't reload from disk - we already have the updated data from the command response
+            // Only refresh the table list if a new table was created
+            if (data.newTableName) {
               this.tableNames = Object.keys(this.tables);
             }
           }, 1000);
