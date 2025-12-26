@@ -1,0 +1,2 @@
+INIT Date TODAY()
+CHECK Date !BLANK(Date)

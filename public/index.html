@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CSV Editor</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f5f5f5;
+    }
+    
+    .header {
+      background-color: #2c3e50;
+      color: white;
+      padding: 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .header h1 {
+      font-size: 1.5rem;
+    }
+    
+    .restart-btn {
+      background-color: #e74c3c;
+      color: white;
+      border: none;
+      padding: 0.5rem 1rem;
+      cursor: pointer;
+      border-radius: 4px;
+      font-size: 1rem;
+    }
+    
+    .restart-btn:hover {
+      background-color: #c0392b;
+    }
+    
+    .controls {
+      padding: 1rem;
+      background-color: white;
+      border-bottom: 1px solid #ddd;
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    
+    .control-group {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    
+    select, input, button {
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    
+    button {
+      background-color: #3498db;
+      color: white;
+      cursor: pointer;
+      border: none;
+    }
+    
+    button:hover {
+      background-color: #2980b9;
+    }
+    
+    button:disabled {
+      background-color: #95a5a6;
+      cursor: not-allowed;
+    }
+    
+    .table-container {
+      margin: 1rem;
+      background-color: white;
+      border-radius: 4px;
+      overflow: hidden;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .table-scroll-wrapper {
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    
+    .table-scrollbar-top {
+      overflow-x: auto;
+      overflow-y: hidden;
+      height: 20px;
+      margin-bottom: -20px;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .table-scrollbar-top::-webkit-scrollbar {
+      height: 20px;
+    }
+    
+    .table-scrollbar-top::-webkit-scrollbar-track {
+      background: #f1f1f1;
+    }
+    
+    .table-scrollbar-top::-webkit-scrollbar-thumb {
+      background: #888;
+      border-radius: 10px;
+    }
+    
+    .table-content {
+      overflow-x: auto;
+    }
+    
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 100%;
+    }
+    
+    th, td {
+      padding: 0.75rem;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+      white-space: nowrap;
+    }
+    
+    th {
+      background-color: #34495e;
+      color: white;
+      font-weight: bold;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    
+    tr:hover {
+      background-color: #f5f5f5;
+    }
+    
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0,0,0,0.5);
+    }
+    
+    .modal.show {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    
+    .modal-content {
+      background-color: white;
+      padding: 2rem;
+      border-radius: 8px;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+    }
+    
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+    }
+    
+    .close {
+      font-size: 1.5rem;
+      cursor: pointer;
+      color: #999;
+    }
+    
+    .close:hover {
+      color: #000;
+    }
+    
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 0.5rem;
+      font-weight: bold;
+    }
+    
+    .form-group input, .form-group select, .form-group textarea {
+      width: 100%;
+      padding: 0.5rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+    }
+    
+    .form-group input.error {
+      border-color: #e74c3c;
+      background-color: #ffe6e6;
+    }
+    
+    .error-message {
+      color: #e74c3c;
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+    
+    .success-message {
+      color: #27ae60;
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+    }
+    
+    .logging-controls {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    
+    .logging-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 50px;
+      height: 24px;
+    }
+    
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+      border-radius: 24px;
+    }
+    
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: .4s;
+      border-radius: 50%;
+    }
+    
+    input:checked + .slider {
+      background-color: #3498db;
+    }
+    
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <h1>CSV Editor</h1>
+      <button class="restart-btn" @click="restart">Restart</button>
+    </div>
+    
+    <div class="controls">
+      <div class="control-group">
+        <label>Table:</label>
+        <select v-model="currentTable" @change="onTableChange">
+          <option value="">Select a table</option>
+          <option v-for="name in tableNames" :key="name" :value="name">{{ name }}</option>
+        </select>
+      </div>
+      
+      <div class="control-group">
+        <label>Command:</label>
+        <select v-model="selectedCommand" @change="onCommandSelect">
+          <option value="">Select a command</option>
+          <option v-for="cmd in sortedCommands" :key="cmd" :value="cmd">{{ cmd }}</option>
+        </select>
+      </div>
+      
+      <button @click="addRow" :disabled="!currentTable">Add Row</button>
+      <button @click="editRow" :disabled="!currentTable || selectedRowIndex === null">Edit Row</button>
+      <button @click="deleteRow" :disabled="!currentTable || selectedRowIndex === null">Delete Row</button>
+      
+      <div class="logging-controls">
+        <div class="logging-toggle">
+          <label>Log Commands:</label>
+          <label class="switch">
+            <input type="checkbox" v-model="commandLoggingEnabled" @change="toggleLogging">
+            <span class="slider"></span>
+          </label>
+        </div>
+        <button @click="saveCommandsLog">Save Log</button>
+        <button @click="clearCommandsLog">Clear Log</button>
+      </div>
+    </div>
+    
+    <div class="table-container" v-if="currentTableData">
+      <div class="table-scrollbar-top" ref="topScrollbar" @scroll="syncScroll">
+        <div :style="{ width: tableWidth + 'px', height: '1px' }"></div>
+      </div>
+      <div class="table-content" ref="tableContent" @scroll="syncScroll">
+        <table>
+          <thead>
+            <tr>
+              <th v-for="col in currentTableData.schema" :key="col.name">{{ col.name }} ({{ col.type }})</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(row, index) in currentTableData.rows" 
+                :key="index" 
+                @click="selectRow(index)"
+                :class="{ 'selected': selectedRowIndex === index }"
+                :style="{ backgroundColor: selectedRowIndex === index ? '#e3f2fd' : '' }">
+              <td v-for="col in currentTableData.schema" :key="col.name">
+                <span v-if="col.type === 'REAL'">{{ formatReal(row[col.name]) }}</span>
+                <span v-else>{{ row[col.name] }}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Command Modal -->
+    <div class="modal" :class="{ show: showCommandModal }" @click.self="closeCommandModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>{{ selectedCommand }}</h2>
+          <span class="close" @click="closeCommandModal">&times;</span>
+        </div>
+        <div v-if="selectedCommand === 'DROP_COLUMN'">
+          <div class="form-group">
+            <label>Column Name:</label>
+            <select v-model="commandParams.columnName">
+              <option value="">Select column</option>
+              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'RENAME_TABLE'">
+          <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'DELETE_ROW'">
+          <div class="form-group">
+            <label>Expression:</label>
+            <input type="text" v-model="commandParams.expression" placeholder="e.g., Age > 30" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'COLLAPSE_TABLE'">
+          <div class="form-group">
+            <label>Column Name (TEXT, optional):</label>
+            <select v-model="commandParams.columnName">
+              <option value="">(No grouping - sum all)</option>
+              <option v-for="col in textColumns" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'REPLACE_TEXT'">
+          <div class="form-group">
+            <label>Column Name:</label>
+            <select v-model="commandParams.columnName">
+              <option value="">Select column</option>
+              <option v-for="col in textColumns" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Regular Expression:</label>
+            <input type="text" v-model="commandParams.regex" />
+          </div>
+          <div class="form-group">
+            <label>Replacement (use $1, $2, etc. for groups):</label>
+            <input type="text" v-model="commandParams.replacement" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'ADD_COLUMN'">
+          <div class="form-group">
+            <label>Column Name:</label>
+            <input type="text" v-model="commandParams.columnName" />
+          </div>
+          <div class="form-group">
+            <label>Expression:</label>
+            <input type="text" v-model="commandParams.expression" placeholder="e.g., Price * Quantity" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'JOIN_TABLE'">
+          <div class="form-group">
+            <label>Table to Join:</label>
+            <select v-model="commandParams.tableName1">
+              <option value="">Select table</option>
+              <option v-for="name in tableNames" :key="name" :value="name">{{ name }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Join Column:</label>
+            <input type="text" v-model="commandParams.joinColumn" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'COPY_TABLE'">
+          <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'SORT_TABLE'">
+          <div class="form-group">
+            <label>Column Name:</label>
+            <select v-model="commandParams.columnName">
+              <option value="">Select column</option>
+              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Order:</label>
+            <select v-model="commandParams.order">
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="commandError" class="error-message">{{ commandError }}</div>
+        <div v-if="commandSuccess" class="success-message">{{ commandSuccess }}</div>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+          <button @click="closeCommandModal">Cancel</button>
+          <button @click="executeCommand" :disabled="!canExecuteCommand">Execute</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Add/Edit Row Modal -->
+    <div class="modal" :class="{ show: showRowModal }" @click.self="closeRowModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>{{ rowModalMode === 'add' ? 'Add Row' : 'Edit Row' }}</h2>
+          <span class="close" @click="closeRowModal">&times;</span>
+        </div>
+        <div v-for="col in currentTableData?.schema" :key="col.name" class="form-group">
+          <label :for="'field-' + col.name">{{ col.name }} ({{ col.type }}):</label>
+          <input 
+            :id="'field-' + col.name"
+            type="text" 
+            v-model="rowData[col.name]"
+            :class="{ error: rowErrors.includes(col.name) }"
+          />
+        </div>
+        <div v-if="rowError" class="error-message">{{ rowError }}</div>
+        <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
+          <button @click="closeRowModal">Cancel</button>
+          <button @click="saveRow">{{ rowModalMode === 'add' ? 'Add' : 'Save' }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="app.js"></script>
+</body>
+</html>
+

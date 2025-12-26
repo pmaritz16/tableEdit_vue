@@ -1,0 +1,115 @@
+Write a program, called csvedit, to clean up and summarize data in CSV files.
+
+The program should use:
+- javascript
+- the Vue framework in the client , and ensure that large payloads (> 1MB) can be sent to the server.
+
+Include a "restart" button in the top right of the screen, to completely restart the program,
+re-initializing everything, as tough the program was being started for the first time.
+
+
+The CSV files will be located in a directory called "data",located in the program's home directory.
+All files with extension ".CSV" should be loaded.
+The first line of a CSV file will give the schema in form "columnName:columnType", with columnType being
+either "TEXT", "INT", "REAL". If no type is given, assume TEXT. 
+
+Any line of the CSV file which is longer than number of columns in the schema should be truncated,
+shorter lines should be filled out using default values: '' for TEXT, 0 for INT, 0.0 for REAL.
+On reading in a line, if a field is of type REAL, then remove any commas or $ signs from the text of the field.
+When in memory, store the fields of the lines of data, according to their types, type INT as integert, REAL as float, etc.
+
+The program should read the CSV files in and display them in tabular form, with drop down to switch between tables.
+When displaying data of type REAL, only show 2 digits of precision. The tables should be horizontally scrollable
+if all columns cannot be fitted into the current view. The horizontal scroll base should appear at the top of the table.
+
+The program should log all actions and errors to a "main.log" file, and write that file out when an entry is made.
+Ensure that all user commands defined below aer logged with their parameters and success or failure.
+
+This section make reference to an "augmented expression" which will be defined later.
+The program should offer the user a menu of commands to manipulate the tables:
+- SAVE_TABLE the table back out to a file in "data" directory, using "tableName.csv" as the name, overwriting the original if it exists.
+- DROP_COLUMN a column (bring up a drop-down of columns to pick from)
+- RENAME_TABLE rename a table (bring up a text field to capture new name)
+- DELETE_ROW rows if a specified augmented expression evaluates to true,
+- COLLAPSE_TABLE: create a new table by grouping on a particular column ("columnName"), entered by the user, of type TEXT in the following way:
+	- for each group of rows with the same columnName, the values of all INT and REAL columns are sum to get a group total.
+	- for each group, a row is inserted in with a field for columnName set to the columnName value for that group, and a field for each of the source
+		table columns of type INT or REAL set to the corresponding subtotal for that group.
+	- if no columnName is given then the new table just has a column for each column of type INT or REAL
+		with the value set to the sum of the corresponding source table column.
+- REPLACE_TEXT: in specified column of type TEXT, when the contents match a specified regular expression, replace the contents with a specified
+	replacement string, where '$x' represents the corresponding matched portion of the origin contents.
+- ADD_COLUMN: add a column with user specified columnName and set the value of its fields by evaluating
+	a given augmented expression for each row in the table.
+- JOIN_TABLE: join current table (currentTable) to table with user specified table (tableName1) on user specified column "joinColumn".
+	Generate error if joinColumn is not present in both tables. Join means that for each row in currentTable,
+	a check is made to see if there is a row in tableName1 which has a value of the field joinColumn that matches the value of field joinColumn
+	in the currentTable. If there is then, all the values of columns in tableName1, except the column joinColumn,
+	are appended to the row in currentTable. If there is no match, then blanks are appended for each of the
+	columns in tableName1, joinColumn.
+- COPY_TABLE: copy current table to a new table of user specified name.
+- SORT_TABLE: sort the table on the specified column in the specified order.
+- DELETE_TABLE: delete table
+
+The above commands should be offered as a drop down menu, sorted in alphabetical order.
+	
+A capability for the user to optionally turn on or off the logging of user actions. Default is to start with it off.
+These should be logged to a file called "commands.txt" in the data directory.
+The user should be offered the option to save or clear the log file at any time.
+There is not need to include date/time stamps in the commands log.
+On start-up, a check should be made after loading the CSV files to see if a commands file exists and if so,
+it should be loaded and the commands logged should be replayed. Command replay should stop if an error
+occurs and an error message displayed. A message should be display once all commands have been
+successfuly executed.
+
+An augmented expression is an expression, given as a string, which can be evaluated to yield a value, and that allows:
+- for basic arithmetic operations, + (plus), - (minus), * (multiply), / (divide), ^ (exponentiatin) on field references types INT and REAL,
+- use of constants expressed as numeric strings for types INT and REAL, single quoted strings for type TEXT,
+- when operations involved two fields one of type INT and one of type REAL, the one of type INT should be coerced to REAL,
+- use of boolean operations "&&" (AND), "||" (OR), "!" (NOT) where 0 represents false and non-zero represents true.
+- comparisons (<, =, >) of field values of compatible type, i.e. INT and REAL with each other, and TEXT with TEXT. the result of a comparison should be
+	1 if the comparion is true, 0 if not.
+- sub-expressions enclosed in brackets "( ... )" should be recursively executed. Missed matched brackets should generate an error.
+- missed match types in an operation should generate an error.
+- special operators include:
+	BLANK: takes any field and returns 1 if the field is blank or '', 0 if otherwise.
+	TODAY(): returns today's date in form "YYYY/MM/DD"
+	DAY(): returns current day of the month in form "DD"
+	MONTH(): returns current day of the month in form "MM"
+	YEAR(): returns current year in form "YYYY"
+	NOW(): returns time now in form of "HH:MM:SS".
+	LENGTH(string): returns length of a string.
+	APPEND(string1, string2): returns string1 with string2 appended.
+	UPPER(string): returns string in upper case.
+- allow conditional expressions of form "conditional?expression_true:expression_false" when the "conditional"
+	is evaluated and if true (i.e. non-zero) the "expression_true" is evaluated and returned as the result of the
+	conditional expression, and if not then "expression_false" is evaluated and returned.
+
+Now add a capability for the user to add rows to a table, to edit existing ones and to delete rows.
+The UI for adding a row should show fields initialized to default values for the type of the field:
+'' for TEXT, 0 for INT, 0.0 for REAL. A check should be before saving rows that vales match the typeof the field.
+
+Now add capabilities to initialize fields on an "ADD ROW" operation. These capabilities should be read from a file
+in the "data" directory, called "fileName.RUL", where fileName.CSV is the source file of the current table.
+This file of rules should be run:
+- before an ADD ROW, when only INIT operations (see below) are performed.
+- after and ADD ROW or Edit row, run once for FIXUP operations and then once for CHECK operations.
+
+The general rule will be of form "OPERATION columnName augmented_expression",
+with the variable names referring to vales of the fields of that name in the row being added or edited,
+e.g. UPPER(ColumnName) returns the value of ColumnName converted to upper case.
+Rules are:
+"INIT", which initializes the field to the value returned by the augmented_expression.
+"FIXUP columnName expression" where the value of the field is set to the value of the expression.
+"CHECK columnName expression" where the an error is generated if the expression returns 0.
+
+When running the rules after an ADD ROW or EDIT, if there are errors, processing should continue to the end of the rules file,
+but the edit or add should not be committed, and the offending fields should
+be flagged as being in error by changing the color of that line of the ADD ROW / Edit dialogue box to red.
+
+
+
+
+
+
+
