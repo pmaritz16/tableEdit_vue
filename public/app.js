@@ -20,9 +20,14 @@ createApp({
       rowError: '',
       commandLoggingEnabled: false,
       tableWidth: 0,
+      tags: [],
+      showTagMenu: false,
+      tagMenuRowIndex: null,
+      tagMenuPosition: { x: 0, y: 0 },
       commands: [
         'ADD_COLUMN',
         'COLLAPSE_TABLE',
+        'CONVERT_COLUMN',
         'COPY_TABLE',
         'DELETE_ROWS',
         'DELETE_TABLE',
@@ -33,7 +38,8 @@ createApp({
         'RENAME_TABLE',
         'REPLACE_TEXT',
         'SAVE_TABLE',
-        'SORT_TABLE'
+        'SORT_TABLE',
+        'SPLICE_TABLES'
       ]
     };
   },
@@ -50,7 +56,7 @@ createApp({
       
       switch (this.selectedCommand) {
         case 'DROP_COLUMNS':
-          return this.commandParams.columnsText;
+          return this.commandParams.selectedColumns && this.commandParams.selectedColumns.length > 0;
         case 'REPLACE_TEXT':
           return this.commandParams.columnName;
         case 'RENAME_TABLE':
@@ -70,6 +76,10 @@ createApp({
           return this.commandParams.newName && this.commandParams.groupColumn && this.commandParams.columnsText;
         case 'REORDER_COLUMNS':
           return this.commandParams.columnsText;
+        case 'CONVERT_COLUMN':
+          return this.commandParams.columnName;
+        case 'SPLICE_TABLES':
+          return this.commandParams.newName && this.commandParams.selectedTables && this.commandParams.selectedTables.length > 0;
         case 'SAVE_TABLE':
         case 'DELETE_TABLE':
           return true;
@@ -82,9 +92,16 @@ createApp({
     this.checkLoggingStatus();
     await this.loadTables();
     await this.replayCommands();
+    await this.loadTags();
     // Update table width on window resize
     window.addEventListener('resize', () => {
       this.updateTableWidth();
+    });
+    // Close tag menu when clicking outside
+    document.addEventListener('click', (e) => {
+      if (this.showTagMenu && !e.target.closest('.tag-menu')) {
+        this.showTagMenu = false;
+      }
     });
   },
   methods: {
@@ -160,6 +177,14 @@ createApp({
     onCommandSelect() {
       if (this.selectedCommand) {
         this.commandParams = {};
+        // Initialize selectedTables as empty array for SPLICE_TABLES
+        if (this.selectedCommand === 'SPLICE_TABLES') {
+          this.commandParams.selectedTables = [];
+        }
+        // Initialize selectedColumns as empty array for DROP_COLUMNS
+        if (this.selectedCommand === 'DROP_COLUMNS') {
+          this.commandParams.selectedColumns = [];
+        }
         this.commandError = '';
         this.commandSuccess = '';
         this.showCommandModal = true;
@@ -173,37 +198,67 @@ createApp({
       this.commandSuccess = '';
     },
     async executeCommand() {
-      if (!this.canExecuteCommand || !this.currentTable) return;
+      if (!this.canExecuteCommand) return;
+      // SPLICE_TABLES doesn't require a current table
+      if (this.selectedCommand !== 'SPLICE_TABLES' && !this.currentTable) return;
       
       this.commandError = '';
       this.commandSuccess = '';
       
       // Process command params - convert comma-separated strings to arrays where needed
       const processedParams = { ...this.commandParams };
-      if (this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'REORDER_COLUMNS' || this.selectedCommand === 'DROP_COLUMNS') {
+      if (this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'REORDER_COLUMNS') {
         if (processedParams.columnsText) {
           processedParams.columns = processedParams.columnsText.split(',').map(c => c.trim()).filter(c => c);
           delete processedParams.columnsText;
         }
       }
+      // DROP_COLUMNS now uses selectedColumns array directly
+      if (this.selectedCommand === 'DROP_COLUMNS') {
+        if (processedParams.selectedColumns) {
+          processedParams.columns = processedParams.selectedColumns;
+          delete processedParams.selectedColumns;
+        }
+      }
       
       try {
+        // SPLICE_TABLES doesn't use tableName parameter
+        const requestBody = {
+          command: this.selectedCommand,
+          params: processedParams
+        };
+        if (this.selectedCommand !== 'SPLICE_TABLES') {
+          requestBody.tableName = this.currentTable;
+        }
+        
         const response = await fetch('/api/command', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            command: this.selectedCommand,
-            tableName: this.currentTable,
-            params: processedParams
-          })
+          body: JSON.stringify(requestBody)
         });
         
         const data = await response.json();
         if (data.success) {
           this.commandSuccess = 'Command executed successfully';
           
+          // Handle table deletion - remove from tables object and update UI
+          if (this.selectedCommand === 'DELETE_TABLE') {
+            const deletedTableName = this.currentTable;
+            // Remove table from tables object
+            if (this.tables[deletedTableName]) {
+              delete this.tables[deletedTableName];
+            }
+            // Update table list
+            this.tableNames = Object.keys(this.tables);
+            // Clear current table if it was the deleted one
+            if (this.currentTable === deletedTableName) {
+              this.currentTable = '';
+              this.currentTableData = null;
+              this.selectedRowIndex = null;
+            }
+          }
           // Handle table rename - update local tables object and switch to new name
-          if (this.selectedCommand === 'RENAME_TABLE' && data.newTableName) {
+          else if (this.selectedCommand === 'RENAME_TABLE' && data.newTableName) {
             const oldTableName = this.currentTable;
             // Update the tables object: move data from old name to new name
             if (this.tables[oldTableName]) {
@@ -218,15 +273,15 @@ createApp({
               this.updateTableWidth();
             });
           }
-          // Handle new table creation (e.g., COPY_TABLE, COLLAPSE_TABLE) BEFORE reloading
+          // Handle new table creation (e.g., COPY_TABLE, COLLAPSE_TABLE, GROUP_TABLE, SPLICE_TABLES) BEFORE reloading
           else if (data.newTableName) {
             // Ensure the table data is set before switching to it
             if (data.table) {
               this.tables[data.newTableName] = data.table;
             }
             this.tableNames = Object.keys(this.tables);
-            // Switch to the new table for COPY_TABLE, COLLAPSE_TABLE, and GROUP_TABLE
-            if ((this.selectedCommand === 'COPY_TABLE' || this.selectedCommand === 'COLLAPSE_TABLE' || this.selectedCommand === 'GROUP_TABLE') && data.table) {
+            // Switch to the new table for COPY_TABLE, COLLAPSE_TABLE, GROUP_TABLE, and SPLICE_TABLES
+            if ((this.selectedCommand === 'COPY_TABLE' || this.selectedCommand === 'COLLAPSE_TABLE' || this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'SPLICE_TABLES') && data.table) {
               this.currentTable = data.newTableName;
               this.currentTableData = data.table;
               this.$nextTick(() => {
@@ -590,6 +645,63 @@ createApp({
         // No commands file or error reading - that's okay, just log it
         console.log('No commands file found or error reading commands file');
       }
+    },
+    async loadTags() {
+      try {
+        const response = await fetch('/api/tags');
+        const data = await response.json();
+        if (data.success) {
+          this.tags = data.tags;
+        }
+      } catch (error) {
+        console.error('Failed to load tags:', error);
+      }
+    },
+    showTagContextMenu(event, rowIndex) {
+      event.preventDefault();
+      event.stopPropagation();
+      
+      // Load tags if not already loaded
+      if (this.tags.length === 0) {
+        this.loadTags();
+      }
+      
+      this.tagMenuRowIndex = rowIndex;
+      this.tagMenuPosition = { x: event.clientX, y: event.clientY };
+      this.showTagMenu = true;
+    },
+    async selectTag(tag) {
+      if (this.tagMenuRowIndex === null || !this.currentTable) {
+        return;
+      }
+      
+      try {
+        const response = await fetch('/api/row/tag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tableName: this.currentTable,
+            rowIndex: this.tagMenuRowIndex,
+            tag: tag
+          })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+          this.currentTableData = data.table;
+          this.tables[this.currentTable] = data.table;
+          this.$nextTick(() => {
+            this.updateTableWidth();
+          });
+        } else {
+          alert('Failed to tag row: ' + (data.error || 'Unknown error'));
+        }
+      } catch (error) {
+        alert('Failed to tag row: ' + error.message);
+      }
+      
+      this.showTagMenu = false;
+      this.tagMenuRowIndex = null;
     }
   }
 }).mount('#app');

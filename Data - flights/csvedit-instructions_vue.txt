@@ -114,6 +114,15 @@ When running the rules after an ADD ROW or EDIT, if there are errors, processing
 but the edit or add should not be committed, and the offending fields should
 be flagged as being in error by changing the color of that line of the ADD ROW / Edit dialogue box to red.
 
+Now allow the user to quickly tag rows as follows. If the user right clicks on a row in the table, the 
+following should happen:
+-	a column called "tag" should be added, if not already done, to the table,
+-	a file "commands.tag" should be read, if not already done so, from the data diectory,
+- 	a drop down menu cotaining the tags read from the commands.tag file should be presented to the user,
+-	if the user picks one, then the tag field will be updated with that value, over-writing any old value,
+-	tags in the "commands.tag" file will be stored in plain text, one per line.
+
+
 
 
 

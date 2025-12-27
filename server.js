@@ -867,7 +867,8 @@ app.post('/api/command', async (req, res) => {
   let { command, params, tableName } = req.body;
   
   // Normalize table names (remove .csv/.CSV extension if present)
-  if (tableName) {
+  // SPLICE_TABLES doesn't require tableName
+  if (tableName && command !== 'SPLICE_TABLES') {
     tableName = tableName.replace(/\.(csv|CSV)$/i, '');
   }
   if (params && params.tableName1) {
@@ -875,6 +876,10 @@ app.post('/api/command', async (req, res) => {
   }
   if (params && params.newName) {
     params.newName = params.newName.replace(/\.(csv|CSV)$/i, '');
+  }
+  // Normalize table names in selectedTables array for SPLICE_TABLES
+  if (params && params.selectedTables && Array.isArray(params.selectedTables)) {
+    params.selectedTables = params.selectedTables.map(name => name.replace(/\.(csv|CSV)$/i, ''));
   }
   
   try {
@@ -891,7 +896,8 @@ app.post('/api/command', async (req, res) => {
     // This ensures consistent logging, error handling, and parameter normalization.
     // Commands handled: SAVE_TABLE, DROP_COLUMNS, RENAME_TABLE, DELETE_ROWS,
     // COLLAPSE_TABLE, REPLACE_TEXT, ADD_COLUMN, JOIN_TABLE, COPY_TABLE,
-    // SORT_TABLE, DELETE_TABLE, GROUP_TABLE, REORDER_COLUMNS
+    // SORT_TABLE, DELETE_TABLE, GROUP_TABLE, REORDER_COLUMNS, CONVERT_COLUMN,
+    // SPLICE_TABLES
     // ========================================================================
     let result;
     switch (command) {
@@ -948,6 +954,18 @@ app.post('/api/command', async (req, res) => {
         break;
       case 'REORDER_COLUMNS':
         result = await reorderColumns(tableName, params.columns);
+        break;
+      case 'CONVERT_COLUMN':
+        result = await convertColumn(tableName, params.columnName);
+        break;
+      case 'SPLICE_TABLES':
+        if (!params || !params.newName) {
+          result = { success: false, error: 'New table name is required' };
+        } else if (!params.selectedTables || !Array.isArray(params.selectedTables) || params.selectedTables.length === 0) {
+          result = { success: false, error: 'At least one table must be selected' };
+        } else {
+          result = await spliceTables(params.newName, params.selectedTables);
+        }
         break;
       default:
         throw new Error(`Unknown command: ${command}`);
@@ -1607,6 +1625,142 @@ async function reorderColumns(tableName, columns) {
 }
 
 /**
+ * Converts a TEXT column to REAL type, stripping $ signs and commas before conversion.
+ * Non-numeric fields are left unchanged.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - The TEXT column to convert
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function convertColumn(tableName, columnName) {
+  if (!tables[tableName]) {
+    return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  const table = tables[tableName];
+  const col = table.schema.find(c => c.name === columnName);
+  if (!col) {
+    return { success: false, error: `Column ${columnName} not found` };
+  }
+  
+  if (col.type !== 'TEXT') {
+    return { success: false, error: `Column ${columnName} is not of type TEXT` };
+  }
+  
+  // Convert values: strip $ and commas, try to parse as number
+  for (const row of table.rows) {
+    const value = String(row[columnName] || '');
+    // Strip $ signs and commas
+    const cleaned = value.replace(/[$,\s]/g, '');
+    
+    // Try to parse as number
+    if (cleaned !== '' && !isNaN(cleaned)) {
+      const numValue = parseFloat(cleaned);
+      if (!isNaN(numValue)) {
+        row[columnName] = numValue;
+      }
+      // If parsing fails, leave value unchanged (it's already a string)
+    }
+    // If cleaned is empty or not numeric, leave value unchanged
+  }
+  
+  // Update column type to REAL
+  col.type = 'REAL';
+  
+  await logAction(`Converted column ${columnName} from TEXT to REAL in table ${tableName}`);
+  return { success: true, table: serializeTable(table) };
+}
+
+/**
+ * Creates a new table by splicing (concatenating) rows from multiple selected tables.
+ * All selected tables must have matching schemas (same columns with same types).
+ * 
+ * @param {string} newTableName - The name for the new table
+ * @param {Array<string>} selectedTables - Array of table names to splice
+ * @returns {Promise<{success: boolean, error?: string, newTableName?: string, table?: Object}>}
+ */
+async function spliceTables(newTableName, selectedTables) {
+  if (!newTableName) {
+    return { success: false, error: 'New table name is required' };
+  }
+  
+  if (!selectedTables || !Array.isArray(selectedTables) || selectedTables.length === 0) {
+    return { success: false, error: 'At least one table must be selected' };
+  }
+  
+  // Check if new table name already exists
+  if (tables[newTableName]) {
+    return { success: false, error: `Table ${newTableName} already exists` };
+  }
+  
+  // Verify all selected tables exist
+  for (const tableName of selectedTables) {
+    if (!tables[tableName]) {
+      return { success: false, error: `Table ${tableName} not found` };
+    }
+  }
+  
+  // Get schemas from all selected tables
+  const tableSchemas = selectedTables.map(tableName => ({
+    name: tableName,
+    schema: tables[tableName].schema
+  }));
+  
+  // Check that all schemas match
+  if (tableSchemas.length > 1) {
+    const firstSchema = tableSchemas[0].schema;
+    
+    // Helper function to compare schemas
+    const schemasMatch = (schema1, schema2) => {
+      if (schema1.length !== schema2.length) {
+        return false;
+      }
+      for (let i = 0; i < schema1.length; i++) {
+        if (schema1[i].name !== schema2[i].name || schema1[i].type !== schema2[i].type) {
+          return false;
+        }
+      }
+      return true;
+    };
+    
+    // Compare all schemas against the first one
+    for (let i = 1; i < tableSchemas.length; i++) {
+      if (!schemasMatch(firstSchema, tableSchemas[i].schema)) {
+        const firstTableName = tableSchemas[0].name;
+        const mismatchedTableName = tableSchemas[i].name;
+        return { 
+          success: false, 
+          error: `Schema mismatch: Table "${firstTableName}" and "${mismatchedTableName}" have different schemas. All tables must have matching schemas to splice.` 
+        };
+      }
+    }
+  }
+  
+  // All schemas match, use the first table's schema
+  const mergedSchema = JSON.parse(JSON.stringify(tableSchemas[0].schema));
+  
+  // Collect all rows from selected tables
+  const mergedRows = [];
+  for (const tableName of selectedTables) {
+    const table = tables[tableName];
+    for (const row of table.rows) {
+      // Create a deep copy of the row
+      mergedRows.push(JSON.parse(JSON.stringify(row)));
+    }
+  }
+  
+  // Create new table
+  tables[newTableName] = {
+    schema: mergedSchema,
+    rows: mergedRows,
+    originalFile: `${newTableName}.CSV`
+  };
+  
+  await logAction(`Spliced ${selectedTables.length} tables into ${newTableName} with ${mergedRows.length} rows`);
+  return { success: true, newTableName: newTableName, table: serializeTable(tables[newTableName]) };
+}
+
+/**
  * Serializes a table object for transmission to the client.
  * 
  * @param {Object} table - The table object with schema and rows
@@ -2102,6 +2256,85 @@ app.post('/api/row/delete', async (req, res) => {
     res.json({ success: true, table: serializeTable(table) });
   } catch (error) {
     await logError('Failed to delete row', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Gets the list of tags from commands.tag file.
+ * Tags are stored one per line in plain text.
+ * 
+ * @route GET /api/tags
+ * @returns {Promise<Object>} Result object with success flag and tags array
+ */
+app.get('/api/tags', async (req, res) => {
+  try {
+    const tagsFile = path.join(DATA_DIR, 'commands.tag');
+    
+    try {
+      const content = await fs.readFile(tagsFile, 'utf-8');
+      const tags = content
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0);
+      
+      await logAction(`Loaded ${tags.length} tags from commands.tag`);
+      res.json({ success: true, tags });
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        // File doesn't exist, return empty tags array
+        await logAction('commands.tag file not found, returning empty tags');
+        res.json({ success: true, tags: [] });
+      } else {
+        throw error;
+      }
+    }
+  } catch (error) {
+    await logError('Failed to read tags', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Updates a row's tag field. Adds the "tag" column if it doesn't exist.
+ * 
+ * @route POST /api/row/tag
+ * @param {string} tableName - The name of the table
+ * @param {number} rowIndex - The index of the row to tag
+ * @param {string} tag - The tag value to set
+ * @returns {Promise<Object>} Result object with success flag and updated table
+ */
+app.post('/api/row/tag', async (req, res) => {
+  const { tableName, rowIndex, tag } = req.body;
+  
+  try {
+    if (!tables[tableName]) {
+      return res.json({ success: false, error: `Table ${tableName} not found` });
+    }
+    
+    const table = tables[tableName];
+    if (rowIndex < 0 || rowIndex >= table.rows.length) {
+      return res.json({ success: false, error: 'Invalid row index' });
+    }
+    
+    // Check if "tag" column exists, add it if not
+    let tagColumn = table.schema.find(col => col.name === 'tag');
+    if (!tagColumn) {
+      table.schema.push({ name: 'tag', type: 'TEXT' });
+      // Initialize tag field for all existing rows
+      for (const row of table.rows) {
+        row.tag = '';
+      }
+      await logAction(`Added "tag" column to table ${tableName}`);
+    }
+    
+    // Update the row's tag field
+    table.rows[rowIndex].tag = tag || '';
+    await logAction(`Tagged row ${rowIndex} in table ${tableName} with "${tag}"`);
+    
+    res.json({ success: true, table: serializeTable(table) });
+  } catch (error) {
+    await logError('Failed to tag row', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

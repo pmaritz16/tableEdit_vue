@@ -302,6 +302,38 @@
     input:checked + .slider:before {
       transform: translateX(26px);
     }
+    
+    .tag-menu {
+      position: fixed;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+      z-index: 1000;
+      min-width: 150px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+    
+    .tag-menu-item {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 1px solid #eee;
+    }
+    
+    .tag-menu-item:hover {
+      background-color: #f0f0f0;
+    }
+    
+    .tag-menu-item:last-child {
+      border-bottom: none;
+    }
+    
+    .tag-menu-empty {
+      padding: 8px 12px;
+      color: #999;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -360,6 +392,7 @@
             <tr v-for="(row, index) in currentTableData.rows" 
                 :key="index" 
                 @click="selectRow(index)"
+                @contextmenu="showTagContextMenu($event, index)"
                 :class="{ 'selected': selectedRowIndex === index }"
                 :style="{ backgroundColor: selectedRowIndex === index ? '#e3f2fd' : '' }">
               <td v-for="col in currentTableData.schema" :key="col.name">
@@ -381,8 +414,17 @@
         </div>
         <div v-if="selectedCommand === 'DROP_COLUMNS'">
           <div class="form-group">
-            <label>Columns to Drop (comma-separated):</label>
-            <input type="text" v-model="commandParams.columnsText" placeholder="e.g., Column1, Column2, Column3" />
+            <label>Select Columns to Drop:</label>
+            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; border-radius: 4px;">
+              <label v-for="col in currentTableData?.schema" :key="col.name" style="display: block; margin-bottom: 8px;">
+                <input type="checkbox" 
+                       :value="col.name" 
+                       v-model="commandParams.selectedColumns" 
+                       style="margin-right: 8px;" />
+                {{ col.name }} ({{ col.type }})
+              </label>
+            </div>
+            <small>Select one or more columns to remove from the table.</small>
           </div>
         </div>
         <div v-else-if="selectedCommand === 'RENAME_TABLE'">
@@ -496,6 +538,35 @@
             </select>
           </div>
         </div>
+        <div v-else-if="selectedCommand === 'CONVERT_COLUMN'">
+          <div class="form-group">
+            <label>Column Name (TEXT column to convert to REAL):</label>
+            <select v-model="commandParams.columnName">
+              <option value="">Select column</option>
+              <option v-for="col in textColumns" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+          <small>This will convert the selected TEXT column to REAL type. $ signs and commas will be stripped before conversion. Non-numeric values will be left unchanged.</small>
+        </div>
+        <div v-else-if="selectedCommand === 'SPLICE_TABLES'">
+          <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
+          <div class="form-group">
+            <label>Select Tables to Splice:</label>
+            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ccc; padding: 8px; border-radius: 4px;">
+              <label v-for="name in tableNames" :key="name" style="display: block; margin-bottom: 8px;">
+                <input type="checkbox" 
+                       :value="name" 
+                       v-model="commandParams.selectedTables" 
+                       style="margin-right: 8px;" />
+                {{ name }}
+              </label>
+            </div>
+            <small>Select one or more tables. All rows from selected tables will be combined into the new table.</small>
+          </div>
+        </div>
         <div v-if="commandError" class="error-message">{{ commandError }}</div>
         <div v-if="commandSuccess" class="success-message">{{ commandSuccess }}</div>
         <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
@@ -525,6 +596,21 @@
         <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
           <button @click="closeRowModal">Cancel</button>
           <button @click="saveRow">{{ rowModalMode === 'add' ? 'Add' : 'Save' }}</button>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Tag Context Menu -->
+    <div v-if="showTagMenu" 
+         class="tag-menu" 
+         :style="{ left: tagMenuPosition.x + 'px', top: tagMenuPosition.y + 'px' }">
+      <div v-if="tags.length === 0" class="tag-menu-empty">No tags available</div>
+      <div v-else>
+        <div v-for="tag in tags" 
+             :key="tag" 
+             class="tag-menu-item" 
+             @click="selectTag(tag)">
+          {{ tag }}
         </div>
       </div>
     </div>
