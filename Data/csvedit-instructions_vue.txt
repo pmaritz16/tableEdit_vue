@@ -31,9 +31,9 @@ Ensure that all user commands defined below aer logged with their parameters and
 This section make reference to an "augmented expression" which will be defined later.
 The program should offer the user a menu of commands to manipulate the tables:
 - SAVE_TABLE the table back out to a file in "data" directory, using "tableName.csv" as the name, overwriting the original if it exists.
-- DROP_COLUMN a column (bring up a drop-down of columns to pick from)
+- DROP_COLUMNS: his will take as arguments column1 column2 ... etc, and drop those columns from the table.
 - RENAME_TABLE rename a table (bring up a text field to capture new name)
-- DELETE_ROW rows if a specified augmented expression evaluates to true,
+- DELETE_ROWS rows if a specified augmented expression evaluates to true,
 - COLLAPSE_TABLE: create a new table by grouping on a particular column ("columnName"), entered by the user, of type TEXT in the following way:
 	- for each group of rows with the same columnName, the values of all INT and REAL columns are sum to get a group total.
 	- for each group, a row is inserted in with a field for columnName set to the columnName value for that group, and a field for each of the source
@@ -53,6 +53,10 @@ The program should offer the user a menu of commands to manipulate the tables:
 - COPY_TABLE: copy current table to a new table of user specified name.
 - SORT_TABLE: sort the table on the specified column in the specified order.
 - DELETE_TABLE: delete table
+- GROUP_TABLE: taking the following arguments: groupColumn column1 column2 ... etc. This will group the table by the values in the groupColumn
+	and for each group provide a column with the sum of the values of column1, column2, ... etc.
+- REORDER_COLUMNS: this will take as arguments column1 column2 ... etc, and bring those columns to be the first columns in the table,
+	i.e.column1 becomes first column of the table, column2 the second, etc.
 
 The above commands should be offered as a drop down menu, sorted in alphabetical order.
 	

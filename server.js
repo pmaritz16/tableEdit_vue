@@ -1,3 +1,12 @@
+/**
+ * CSV Editor Server
+ * 
+ * A Node.js/Express server for managing CSV files with schema validation,
+ * data transformation, and rule-based operations.
+ * 
+ * @module server
+ */
+
 const express = require('express');
 const cors = require('cors');
 const fs = require('fs').promises;
@@ -16,7 +25,10 @@ app.use(bodyParser.json({ limit: '10mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static('public'));
 
-// Ensure data directory exists
+/**
+ * Ensures the Data directory exists, creating it if necessary.
+ * @returns {Promise<void>}
+ */
 async function ensureDataDir() {
   try {
     await fs.mkdir(DATA_DIR, { recursive: true });
@@ -25,7 +37,11 @@ async function ensureDataDir() {
   }
 }
 
-// Logging functions
+/**
+ * Logs an action message to main.log with timestamp.
+ * @param {string} message - The message to log
+ * @returns {Promise<void>}
+ */
 async function logAction(message) {
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] ${message}\n`;
@@ -36,6 +52,12 @@ async function logAction(message) {
   }
 }
 
+/**
+ * Logs an error message to main.log with timestamp.
+ * @param {string} message - The error message
+ * @param {Error|string} error - The error object or message
+ * @returns {Promise<void>}
+ */
 async function logError(message, error) {
   const timestamp = new Date().toISOString();
   const logEntry = `[${timestamp}] ERROR: ${message} - ${error?.message || error}\n`;
@@ -46,11 +68,23 @@ async function logError(message, error) {
   }
 }
 
-// Initialize
+// Global state
+/** @type {Object<string, {schema: Array<{name: string, type: string}>, rows: Array<Object>, originalFile: string}>} */
 let tables = {};
+/** @type {boolean} */
 let commandLoggingEnabled = false;
 
-// CSV parsing functions
+// ============================================================================
+// CSV Parsing Functions
+// ============================================================================
+
+/**
+ * Parses a CSV line, handling quoted fields and escaped quotes.
+ * Supports fields enclosed in double quotes with internal quotes escaped as "".
+ * 
+ * @param {string} line - The CSV line to parse
+ * @returns {Array<string>} Array of field values
+ */
 function parseCSVLine(line) {
   const fields = [];
   let current = '';
@@ -92,6 +126,14 @@ function parseCSVLine(line) {
   return fields;
 }
 
+/**
+ * Parses the schema line from a CSV file.
+ * Format: "columnName:columnType,columnName2:columnType2,..."
+ * If no type is specified, defaults to TEXT.
+ * 
+ * @param {string} firstLine - The first line of the CSV file containing schema
+ * @returns {Array<{name: string, type: string}>} Array of column definitions
+ */
 function parseSchema(firstLine) {
   const columns = parseCSVLine(firstLine);
   const schema = [];
@@ -106,6 +148,13 @@ function parseSchema(firstLine) {
   return schema;
 }
 
+/**
+ * Cleans a REAL value by removing commas and dollar signs.
+ * Used when reading CSV files to prepare numeric values.
+ * 
+ * @param {string} value - The raw value string
+ * @returns {string} Cleaned value string
+ */
 function cleanRealValue(value) {
   if (typeof value === 'string') {
     return value.replace(/[,$]/g, '');
@@ -113,6 +162,14 @@ function cleanRealValue(value) {
   return value;
 }
 
+/**
+ * Parses a value according to its type (TEXT, INT, or REAL).
+ * Handles type conversion and default values.
+ * 
+ * @param {string} value - The raw value string
+ * @param {string} type - The column type (TEXT, INT, or REAL)
+ * @returns {string|number} Parsed value according to type
+ */
 function parseValue(value, type) {
   if (value === '' || value === null || value === undefined) {
     switch (type) {
@@ -138,6 +195,13 @@ function parseValue(value, type) {
   }
 }
 
+/**
+ * Loads all CSV files from the Data directory.
+ * Preserves in-memory tables (like copied tables) that don't have files on disk.
+ * 
+ * @param {boolean} resetTables - If true, clears all tables before loading
+ * @returns {Promise<{success: boolean, tables?: Object, error?: string}>}
+ */
 async function loadCSVFiles(resetTables = false) {
   await logAction('Loading CSV files from data directory');
   
@@ -216,7 +280,21 @@ async function loadCSVFiles(resetTables = false) {
   }
 }
 
-// Expression evaluator
+// ============================================================================
+// Expression Evaluator
+// ============================================================================
+
+/**
+ * Evaluates augmented expressions with support for:
+ * - Arithmetic operations (+, -, *, /, ^)
+ * - Boolean operations (&&, ||, !)
+ * - Comparisons (<, =, >)
+ * - Conditional expressions (condition ? trueValue : falseValue)
+ * - Special functions (BLANK, TODAY, DAY, MONTH, YEAR, NOW, LENGTH, APPEND, UPPER, TOTAL)
+ * - Field references and constants
+ * 
+ * @class ExpressionEvaluator
+ */
 class ExpressionEvaluator {
   constructor(row, tables, currentTable) {
     this.row = row;
@@ -266,9 +344,11 @@ class ExpressionEvaluator {
     }
     
     // Handle function calls FIRST (before parentheses processing)
+    // Functions like BLANK(), TODAY(), etc. are processed here
     expr = this._handleFunctions(expr);
     
-    // Handle parentheses (but skip if they were part of function calls)
+    // Handle parentheses for grouping sub-expressions
+    // This processes nested expressions like (a + b) * (c + d)
     depth = 0;
     let start = -1;
     for (let i = 0; i < expr.length; i++) {
@@ -291,19 +371,24 @@ class ExpressionEvaluator {
       throw new Error('Mismatched parentheses');
     }
     
-    // Handle field references
+    // Handle field references (replace column names with their values)
+    // Example: "Price" becomes the actual price value from the current row
     expr = this._handleFieldReferences(expr);
     
-    // Handle string literals
+    // Handle string literals (single-quoted strings)
+    // Example: 'Hello' becomes "Hello" (converted to double quotes for consistency)
     expr = this._handleStringLiterals(expr);
     
-    // Handle boolean operations
+    // Handle boolean operations (!, &&, ||)
+    // Order: ! (NOT) first, then && (AND), then || (OR)
     expr = this._handleBooleanOps(expr);
     
-    // Handle comparisons
+    // Handle comparisons (<, =, >)
+    // Returns 1 if true, 0 if false
     expr = this._handleComparisons(expr);
     
-    // Handle arithmetic
+    // Handle arithmetic operations (^, *, /, +, -)
+    // Order: exponentiation, multiplication/division, addition/subtraction
     return this._handleArithmetic(expr);
   }
   
@@ -709,14 +794,75 @@ app.get('/api/tables', async (req, res) => {
   }
 });
 
+/**
+ * Restart endpoint - performs a complete reset equivalent to a cold start.
+ * Clears main.log, deletes all tables from memory, resets command logging,
+ * and reloads CSV files from disk.
+ * 
+ * @route POST /api/restart
+ * @returns {Promise<Object>} Success message
+ */
 app.post('/api/restart', async (req, res) => {
-  await logAction('Restart requested');
-  tables = {};
-  commandLoggingEnabled = false;
-  const result = await loadCSVFiles(true); // Reset tables on restart
-  res.json({ success: true, message: 'Restarted' });
+  try {
+    // Clear main.log file (same as cold start)
+    try {
+      await fs.unlink(MAIN_LOG).catch(() => {
+        // File doesn't exist, that's okay
+      });
+      // Create empty log file
+      await fs.writeFile(MAIN_LOG, '', 'utf-8');
+    } catch (error) {
+      console.error('Failed to clear log file on restart:', error);
+    }
+    
+    // Clear all tables from memory
+    tables = {};
+    
+    // Reset command logging
+    commandLoggingEnabled = false;
+    
+    // Log the restart (after clearing the log, so this is the first entry)
+    await logAction('Server restart - cold start');
+    
+    // Reload CSV files from disk
+    const result = await loadCSVFiles(true); // Reset tables on restart
+    
+    res.json({ success: true, message: 'Restarted' });
+  } catch (error) {
+    await logError('Failed to restart', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
+// ============================================================================
+// API Endpoints
+// ============================================================================
+
+/**
+ * Central command dispatcher endpoint.
+ * All table manipulation commands are routed through this endpoint.
+ * 
+ * Supported commands:
+ * - SAVE_TABLE: Save table to CSV file
+ * - DROP_COLUMNS: Remove multiple columns from the table
+ * - RENAME_TABLE: Rename the table
+ * - DELETE_ROWS: Delete rows matching an expression
+ * - COLLAPSE_TABLE: Group and sum numeric columns
+ * - REPLACE_TEXT: Replace text in a TEXT column using regex
+ * - ADD_COLUMN: Add a column with values from an expression
+ * - JOIN_TABLE: Join two tables on a specified column
+ * - COPY_TABLE: Copy table to a new name
+ * - SORT_TABLE: Sort table by column and order
+ * - DELETE_TABLE: Delete a table
+ * - GROUP_TABLE: Group by column and sum specified columns
+ * - REORDER_COLUMNS: Reorder columns to place specified ones first
+ * 
+ * @route POST /api/command
+ * @param {string} command - The command name
+ * @param {string} tableName - The target table name
+ * @param {Object} params - Command-specific parameters
+ * @returns {Promise<Object>} Result object with success flag and data/error
+ */
 app.post('/api/command', async (req, res) => {
   let { command, params, tableName } = req.body;
   
@@ -734,26 +880,39 @@ app.post('/api/command', async (req, res) => {
   try {
     await logAction(`Command: ${command} on table: ${tableName} with params: ${JSON.stringify(params)}`);
     
+    // Log command to commands.txt if logging is enabled
     if (commandLoggingEnabled) {
       await fs.appendFile(COMMANDS_LOG, `${command} ${tableName || ''} ${JSON.stringify(params || {})}\n`);
     }
     
+    // ========================================================================
+    // CENTRAL COMMAND DISPATCH
+    // All table manipulation commands are routed through this switch statement.
+    // This ensures consistent logging, error handling, and parameter normalization.
+    // Commands handled: SAVE_TABLE, DROP_COLUMNS, RENAME_TABLE, DELETE_ROWS,
+    // COLLAPSE_TABLE, REPLACE_TEXT, ADD_COLUMN, JOIN_TABLE, COPY_TABLE,
+    // SORT_TABLE, DELETE_TABLE, GROUP_TABLE, REORDER_COLUMNS
+    // ========================================================================
     let result;
     switch (command) {
       case 'SAVE_TABLE':
         result = await saveTable(tableName);
         break;
-      case 'DROP_COLUMN':
-        result = await dropColumn(tableName, params.columnName);
+      case 'DROP_COLUMNS':
+        result = await dropColumns(tableName, params.columns);
         break;
       case 'RENAME_TABLE':
         result = await renameTable(tableName, params.newName);
         break;
-      case 'DELETE_ROW':
+      case 'DELETE_ROWS':
         result = await deleteRow(tableName, params.expression);
         break;
       case 'COLLAPSE_TABLE':
-        result = await collapseTable(tableName, params.columnName);
+        if (!params || !params.newName) {
+          result = { success: false, error: 'New table name is required' };
+        } else {
+          result = await collapseTable(tableName, params.columnName, params.newName);
+        }
         break;
       case 'REPLACE_TEXT':
         result = await replaceText(tableName, params.columnName, params.regex, params.replacement);
@@ -780,6 +939,16 @@ app.post('/api/command', async (req, res) => {
       case 'DELETE_TABLE':
         result = await deleteTable(tableName);
         break;
+      case 'GROUP_TABLE':
+        if (!params || !params.newName) {
+          result = { success: false, error: 'New table name is required' };
+        } else {
+          result = await groupTable(tableName, params.groupColumn, params.columns, params.newName);
+        }
+        break;
+      case 'REORDER_COLUMNS':
+        result = await reorderColumns(tableName, params.columns);
+        break;
       default:
         throw new Error(`Unknown command: ${command}`);
     }
@@ -797,7 +966,17 @@ app.post('/api/command', async (req, res) => {
   }
 });
 
-// Command implementations
+// ============================================================================
+// Command Implementations
+// ============================================================================
+
+/**
+ * Saves a table to a CSV file in the Data directory.
+ * The file will be named {tableName}.CSV and will overwrite existing files.
+ * 
+ * @param {string} tableName - The name of the table to save
+ * @returns {Promise<{success: boolean, error?: string, filePath?: string}>}
+ */
 async function saveTable(tableName) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -850,25 +1029,63 @@ async function saveTable(tableName) {
   return { success: true };
 }
 
-async function dropColumn(tableName, columnName) {
+/**
+ * Removes multiple columns from a table.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {Array<string>} columns - Array of column names to remove
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function dropColumns(tableName, columns) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
   }
   
-  const table = tables[tableName];
-  const colIndex = table.schema.findIndex(col => col.name === columnName);
-  if (colIndex === -1) {
-    return { success: false, error: `Column ${columnName} not found` };
+  if (!columns || !Array.isArray(columns) || columns.length === 0) {
+    return { success: false, error: 'At least one column is required' };
   }
   
-  table.schema.splice(colIndex, 1);
+  const table = tables[tableName];
+  const columnsToRemove = new Set(columns);
+  const missingColumns = [];
+  
+  // Verify all columns exist
+  for (const colName of columns) {
+    const colExists = table.schema.some(col => col.name === colName);
+    if (!colExists) {
+      missingColumns.push(colName);
+    }
+  }
+  
+  if (missingColumns.length > 0) {
+    return { success: false, error: `Columns not found: ${missingColumns.join(', ')}` };
+  }
+  
+  // Remove columns from schema (in reverse order to maintain indices)
+  const columnsToRemoveArray = Array.from(columnsToRemove);
+  for (let i = table.schema.length - 1; i >= 0; i--) {
+    if (columnsToRemove.has(table.schema[i].name)) {
+      table.schema.splice(i, 1);
+    }
+  }
+  
+  // Remove columns from all rows
   for (const row of table.rows) {
-    delete row[columnName];
+    for (const colName of columnsToRemoveArray) {
+      delete row[colName];
+    }
   }
   
   return { success: true, table: serializeTable(table) };
 }
 
+/**
+ * Renames a table.
+ * 
+ * @param {string} tableName - The current table name
+ * @param {string} newName - The new table name
+ * @returns {Promise<{success: boolean, error?: string, newTableName?: string}>}
+ */
 async function renameTable(tableName, newName) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -882,9 +1099,16 @@ async function renameTable(tableName, newName) {
   delete tables[tableName];
   tables[newName].originalFile = `${newName}.CSV`;
   
-  return { success: true };
+  return { success: true, newTableName: newName };
 }
 
+/**
+ * Deletes rows from a table where the expression evaluates to true (non-zero).
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} expression - The augmented expression to evaluate for each row
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
 async function deleteRow(tableName, expression) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -908,9 +1132,26 @@ async function deleteRow(tableName, expression) {
   return { success: true, table: serializeTable(table) };
 }
 
-async function collapseTable(tableName, columnName) {
+/**
+ * Collapses a table by grouping on a TEXT column and summing INT/REAL columns.
+ * If no columnName is provided, creates a single row with sums of all numeric columns.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - Optional TEXT column to group by
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function collapseTable(tableName, columnName, newTableName) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  if (!newTableName) {
+    return { success: false, error: 'New table name is required' };
+  }
+  
+  // Check if new table name already exists
+  if (tables[newTableName]) {
+    return { success: false, error: `Table ${newTableName} already exists` };
   }
   
   const table = tables[tableName];
@@ -947,7 +1188,6 @@ async function collapseTable(tableName, columnName) {
   
   const newSchema = columnName ? [groupCol, ...intRealCols] : intRealCols;
   const newRows = Object.values(groups);
-  const newTableName = `${tableName}_collapsed`;
   
   tables[newTableName] = {
     schema: newSchema,
@@ -955,9 +1195,19 @@ async function collapseTable(tableName, columnName) {
     originalFile: `${newTableName}.CSV`
   };
   
-  return { success: true, tableName: newTableName, table: serializeTable(tables[newTableName]) };
+  return { success: true, newTableName: newTableName, table: serializeTable(tables[newTableName]) };
 }
 
+/**
+ * Replaces text in a TEXT column using a regular expression.
+ * Supports replacement patterns like $1, $2 for matched groups.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - The TEXT column to modify
+ * @param {string} regex - The regular expression pattern
+ * @param {string} replacement - The replacement string (supports $x for groups)
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
 async function replaceText(tableName, columnName, regex, replacement) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -987,6 +1237,15 @@ async function replaceText(tableName, columnName, regex, replacement) {
   return { success: true, table: serializeTable(table) };
 }
 
+/**
+ * Adds a new column to a table with values computed from an expression.
+ * Column type is automatically determined (TEXT, INT, or REAL) based on expression results.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - The name of the new column
+ * @param {string} expression - The augmented expression to evaluate for each row
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
 async function addColumn(tableName, columnName, expression) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -1059,6 +1318,16 @@ function checkExpressionForRealColumns(expression, table) {
   return false;
 }
 
+/**
+ * Joins the current table with another table on a specified column.
+ * For each row in the current table, finds matching rows in tableName1 and appends their columns.
+ * If no match is found, blank values are appended.
+ * 
+ * @param {string} tableName - The current table name
+ * @param {string} tableName1 - The table to join with
+ * @param {string} joinColumn - The column name to join on (must exist in both tables)
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
 async function joinTable(tableName, tableName1, joinColumn) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -1114,6 +1383,13 @@ async function joinTable(tableName, tableName1, joinColumn) {
   return { success: true, table: serializeTable(table) };
 }
 
+/**
+ * Creates a copy of a table with a new name.
+ * 
+ * @param {string} tableName - The source table name
+ * @param {string} newName - The name for the new table
+ * @returns {Promise<{success: boolean, error?: string, newTableName?: string, table?: Object}>}
+ */
 async function copyTable(tableName, newName) {
   if (!tableName) {
     return { success: false, error: 'Source table name is required' };
@@ -1145,6 +1421,14 @@ async function copyTable(tableName, newName) {
   return { success: true, newTableName: newName, table: serializeTable(tables[newName]) };
 }
 
+/**
+ * Sorts a table by a specified column in ascending or descending order.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - The column to sort by
+ * @param {string} order - Sort order: 'asc' or 'desc'
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
 async function sortTable(tableName, columnName, order) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -1173,6 +1457,12 @@ async function sortTable(tableName, columnName, order) {
   return { success: true, table: serializeTable(table) };
 }
 
+/**
+ * Deletes a table from memory.
+ * 
+ * @param {string} tableName - The name of the table to delete
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
 async function deleteTable(tableName) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
@@ -1182,6 +1472,146 @@ async function deleteTable(tableName) {
   return { success: true };
 }
 
+/**
+ * Groups a table by a specified column and sums specified numeric columns for each group.
+ * Creates a new table with the group column first, followed by summed columns.
+ * 
+ * @param {string} tableName - The name of the source table
+ * @param {string} groupColumn - The column to group by
+ * @param {Array<string>} columns - Array of column names (INT or REAL) to sum
+ * @param {string} newTableName - The name for the new grouped table
+ * @returns {Promise<{success: boolean, error?: string, newTableName?: string, table?: Object}>}
+ */
+async function groupTable(tableName, groupColumn, columns, newTableName) {
+  if (!tables[tableName]) {
+    return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  if (!newTableName) {
+    return { success: false, error: 'New table name is required' };
+  }
+  
+  // Check if new table name already exists
+  if (tables[newTableName]) {
+    return { success: false, error: `Table ${newTableName} already exists` };
+  }
+  
+  if (!groupColumn) {
+    return { success: false, error: 'Group column is required' };
+  }
+  
+  if (!columns || !Array.isArray(columns) || columns.length === 0) {
+    return { success: false, error: 'At least one column to sum is required' };
+  }
+  
+  const table = tables[tableName];
+  const groupCol = table.schema.find(col => col.name === groupColumn);
+  if (!groupCol) {
+    return { success: false, error: `Group column ${groupColumn} not found` };
+  }
+  
+  // Verify all sum columns exist and are numeric
+  const sumCols = [];
+  for (const colName of columns) {
+    const col = table.schema.find(c => c.name === colName);
+    if (!col) {
+      return { success: false, error: `Column ${colName} not found` };
+    }
+    if (col.type !== 'INT' && col.type !== 'REAL') {
+      return { success: false, error: `Column ${colName} must be of type INT or REAL` };
+    }
+    sumCols.push(col);
+  }
+  
+  // Group rows by groupColumn value
+  const groups = {};
+  for (const row of table.rows) {
+    const key = String(row[groupColumn] || '');
+    if (!groups[key]) {
+      groups[key] = {
+        [groupColumn]: row[groupColumn],
+        sums: {}
+      };
+      for (const col of sumCols) {
+        groups[key].sums[col.name] = 0;
+      }
+    }
+    
+    // Sum the specified columns
+    for (const col of sumCols) {
+      const val = row[col.name] || 0;
+      groups[key].sums[col.name] = (groups[key].sums[col.name] || 0) + val;
+    }
+  }
+  
+  // Build new schema: groupColumn first, then sum columns
+  const newSchema = [groupCol, ...sumCols];
+  
+  // Build new rows
+  const newRows = Object.values(groups).map(group => {
+    const row = { [groupColumn]: group[groupColumn] };
+    for (const col of sumCols) {
+      row[col.name] = group.sums[col.name];
+    }
+    return row;
+  });
+  
+  // Create new table instead of modifying the existing one
+  tables[newTableName] = {
+    schema: newSchema,
+    rows: newRows,
+    originalFile: `${newTableName}.CSV`
+  };
+  
+  return { success: true, newTableName: newTableName, table: serializeTable(tables[newTableName]) };
+}
+
+/**
+ * Reorders columns in a table, placing specified columns first.
+ * Remaining columns follow in their original order.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {Array<string>} columns - Array of column names to place first
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function reorderColumns(tableName, columns) {
+  if (!tables[tableName]) {
+    return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  if (!columns || !Array.isArray(columns) || columns.length === 0) {
+    return { success: false, error: 'At least one column is required' };
+  }
+  
+  const table = tables[tableName];
+  
+  // Verify all columns exist
+  const reorderCols = [];
+  for (const colName of columns) {
+    const col = table.schema.find(c => c.name === colName);
+    if (!col) {
+      return { success: false, error: `Column ${colName} not found` };
+    }
+    reorderCols.push(col);
+  }
+  
+  // Build new schema: reordered columns first, then remaining columns in original order
+  const reorderColNames = new Set(columns);
+  const remainingCols = table.schema.filter(col => !reorderColNames.has(col.name));
+  const newSchema = [...reorderCols, ...remainingCols];
+  
+  // Update the table schema
+  table.schema = newSchema;
+  
+  return { success: true, table: serializeTable(table) };
+}
+
+/**
+ * Serializes a table object for transmission to the client.
+ * 
+ * @param {Object} table - The table object with schema and rows
+ * @returns {Object} Serialized table data
+ */
 function serializeTable(table) {
   return {
     schema: table.schema,
@@ -1190,6 +1620,14 @@ function serializeTable(table) {
 }
 
 // Rules engine
+/**
+ * Loads rules from a .RUL file.
+ * Rules format: "OPERATION columnName expression"
+ * Operations: INIT, FIXUP, CHECK
+ * 
+ * @param {string} fileName - The base filename (without extension) of the rules file
+ * @returns {Promise<Array<{operation: string, columnName: string, expression: string}>>}
+ */
 async function loadRules(fileName) {
   // Try both .RUL and .rul extensions (case-insensitive)
   const rulesPathUpper = path.join(DATA_DIR, `${fileName}.RUL`);
@@ -1668,7 +2106,12 @@ app.post('/api/row/delete', async (req, res) => {
   }
 });
 
-// Start server
+/**
+ * Starts the Express server and initializes the application.
+ * Deletes and recreates main.log on startup.
+ * 
+ * @returns {Promise<void>}
+ */
 async function startServer() {
   await ensureDataDir();
   

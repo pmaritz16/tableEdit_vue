@@ -9,17 +9,19 @@ A comprehensive CSV file editor built with Vue.js frontend and Node.js/Express b
 - Data cleaning (truncate long lines, pad short lines, clean REAL values)
 - Table operations: Add, Edit, Delete rows
 - Command menu with operations:
-  - SAVE_TABLE
-  - DROP_COLUMN
-  - RENAME_TABLE
-  - DELETE_ROW (with expression)
-  - COLLAPSE_TABLE (grouping and summing)
-  - REPLACE_TEXT (regex replacement)
-  - ADD_COLUMN (with expression)
-  - JOIN_TABLE
-  - COPY_TABLE
-  - SORT_TABLE
-  - DELETE_TABLE
+  - SAVE_TABLE - Save table to CSV file
+  - DROP_COLUMNS - Remove multiple columns
+  - RENAME_TABLE - Rename the table
+  - DELETE_ROWS - Delete rows matching an expression
+  - COLLAPSE_TABLE - Group by column and sum numeric columns
+  - REPLACE_TEXT - Replace text in TEXT column using regex
+  - ADD_COLUMN - Add column with values from expression
+  - JOIN_TABLE - Join two tables on a column
+  - COPY_TABLE - Copy table to a new name
+  - SORT_TABLE - Sort table by column and order
+  - DELETE_TABLE - Delete a table
+  - GROUP_TABLE - Group by column and sum specified columns
+  - REORDER_COLUMNS - Reorder columns to place specified ones first
 - Augmented expression evaluator with arithmetic, boolean, comparison, and special functions
 - Rules engine (.RUL files) for INIT, FIXUP, and CHECK operations
 - Command logging (optional) with replay capability
@@ -106,6 +108,7 @@ Expressions support:
 3. Use the command menu to perform operations
 4. Click "Add Row" or "Edit Row" to modify data
 5. Use the restart button to reset the application
+
 
 
 

@@ -24,10 +24,12 @@ createApp({
         'ADD_COLUMN',
         'COLLAPSE_TABLE',
         'COPY_TABLE',
-        'DELETE_ROW',
+        'DELETE_ROWS',
         'DELETE_TABLE',
-        'DROP_COLUMN',
+        'DROP_COLUMNS',
+        'GROUP_TABLE',
         'JOIN_TABLE',
+        'REORDER_COLUMNS',
         'RENAME_TABLE',
         'REPLACE_TEXT',
         'SAVE_TABLE',
@@ -47,22 +49,27 @@ createApp({
       if (!this.selectedCommand) return false;
       
       switch (this.selectedCommand) {
-        case 'DROP_COLUMN':
+        case 'DROP_COLUMNS':
+          return this.commandParams.columnsText;
         case 'REPLACE_TEXT':
           return this.commandParams.columnName;
         case 'RENAME_TABLE':
         case 'COPY_TABLE':
           return this.commandParams.newName;
-        case 'DELETE_ROW':
+        case 'DELETE_ROWS':
           return this.commandParams.expression;
         case 'COLLAPSE_TABLE':
-          return true; // columnName is optional
+          return this.commandParams.newName; // newName is required
         case 'ADD_COLUMN':
           return this.commandParams.columnName && this.commandParams.expression;
         case 'JOIN_TABLE':
           return this.commandParams.tableName1 && this.commandParams.joinColumn;
         case 'SORT_TABLE':
           return this.commandParams.columnName;
+        case 'GROUP_TABLE':
+          return this.commandParams.newName && this.commandParams.groupColumn && this.commandParams.columnsText;
+        case 'REORDER_COLUMNS':
+          return this.commandParams.columnsText;
         case 'SAVE_TABLE':
         case 'DELETE_TABLE':
           return true;
@@ -171,6 +178,15 @@ createApp({
       this.commandError = '';
       this.commandSuccess = '';
       
+      // Process command params - convert comma-separated strings to arrays where needed
+      const processedParams = { ...this.commandParams };
+      if (this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'REORDER_COLUMNS' || this.selectedCommand === 'DROP_COLUMNS') {
+        if (processedParams.columnsText) {
+          processedParams.columns = processedParams.columnsText.split(',').map(c => c.trim()).filter(c => c);
+          delete processedParams.columnsText;
+        }
+      }
+      
       try {
         const response = await fetch('/api/command', {
           method: 'POST',
@@ -178,7 +194,7 @@ createApp({
           body: JSON.stringify({
             command: this.selectedCommand,
             tableName: this.currentTable,
-            params: this.commandParams
+            params: processedParams
           })
         });
         
@@ -186,15 +202,31 @@ createApp({
         if (data.success) {
           this.commandSuccess = 'Command executed successfully';
           
+          // Handle table rename - update local tables object and switch to new name
+          if (this.selectedCommand === 'RENAME_TABLE' && data.newTableName) {
+            const oldTableName = this.currentTable;
+            // Update the tables object: move data from old name to new name
+            if (this.tables[oldTableName]) {
+              this.tables[data.newTableName] = this.tables[oldTableName];
+              delete this.tables[oldTableName];
+            }
+            // Update table list and current selection
+            this.tableNames = Object.keys(this.tables);
+            this.currentTable = data.newTableName;
+            this.currentTableData = this.tables[data.newTableName];
+            this.$nextTick(() => {
+              this.updateTableWidth();
+            });
+          }
           // Handle new table creation (e.g., COPY_TABLE, COLLAPSE_TABLE) BEFORE reloading
-          if (data.newTableName) {
+          else if (data.newTableName) {
             // Ensure the table data is set before switching to it
             if (data.table) {
               this.tables[data.newTableName] = data.table;
             }
             this.tableNames = Object.keys(this.tables);
-            // Optionally switch to the new table
-            if (this.selectedCommand === 'COPY_TABLE' && data.table) {
+            // Switch to the new table for COPY_TABLE, COLLAPSE_TABLE, and GROUP_TABLE
+            if ((this.selectedCommand === 'COPY_TABLE' || this.selectedCommand === 'COLLAPSE_TABLE' || this.selectedCommand === 'GROUP_TABLE') && data.table) {
               this.currentTable = data.newTableName;
               this.currentTableData = data.table;
               this.$nextTick(() => {
@@ -210,6 +242,7 @@ createApp({
               this.updateTableWidth();
             });
           }
+          
           if (data.tableName) {
             this.currentTable = data.tableName;
             this.tableNames = Object.keys(this.tables);
@@ -217,7 +250,7 @@ createApp({
           }
           
           // Update table list if needed (for new tables)
-          if (data.newTableName) {
+          if (data.newTableName && this.selectedCommand !== 'RENAME_TABLE') {
             this.tableNames = Object.keys(this.tables);
           }
           
@@ -439,6 +472,8 @@ createApp({
           this.currentTableData = null;
           this.selectedRowIndex = null;
           this.selectedCommand = '';
+          // Reset command logging to OFF (same as cold start)
+          this.commandLoggingEnabled = false;
           await this.loadTables();
           await this.replayCommands();
           alert('Application restarted');

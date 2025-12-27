@@ -379,13 +379,10 @@
           <h2>{{ selectedCommand }}</h2>
           <span class="close" @click="closeCommandModal">&times;</span>
         </div>
-        <div v-if="selectedCommand === 'DROP_COLUMN'">
+        <div v-if="selectedCommand === 'DROP_COLUMNS'">
           <div class="form-group">
-            <label>Column Name:</label>
-            <select v-model="commandParams.columnName">
-              <option value="">Select column</option>
-              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">{{ col.name }}</option>
-            </select>
+            <label>Columns to Drop (comma-separated):</label>
+            <input type="text" v-model="commandParams.columnsText" placeholder="e.g., Column1, Column2, Column3" />
           </div>
         </div>
         <div v-else-if="selectedCommand === 'RENAME_TABLE'">
@@ -394,13 +391,17 @@
             <input type="text" v-model="commandParams.newName" />
           </div>
         </div>
-        <div v-else-if="selectedCommand === 'DELETE_ROW'">
+        <div v-else-if="selectedCommand === 'DELETE_ROWS'">
           <div class="form-group">
             <label>Expression:</label>
             <input type="text" v-model="commandParams.expression" placeholder="e.g., Age > 30" />
           </div>
         </div>
         <div v-else-if="selectedCommand === 'COLLAPSE_TABLE'">
+          <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
           <div class="form-group">
             <label>Column Name (TEXT, optional):</label>
             <select v-model="commandParams.columnName">
@@ -453,6 +454,30 @@
           <div class="form-group">
             <label>New Table Name:</label>
             <input type="text" v-model="commandParams.newName" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'GROUP_TABLE'">
+          <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
+          <div class="form-group">
+            <label>Group Column:</label>
+            <select v-model="commandParams.groupColumn">
+              <option value="">Select column</option>
+              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">{{ col.name }}</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Columns to Sum (comma-separated):</label>
+            <input type="text" v-model="commandParams.columnsText" placeholder="e.g., Price, Quantity" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'REORDER_COLUMNS'">
+          <div class="form-group">
+            <label>Column Order (comma-separated):</label>
+            <input type="text" v-model="commandParams.columnsText" placeholder="e.g., Name, Age, Salary" />
+            <small>Columns will be reordered with these first, remaining columns follow in original order</small>
           </div>
         </div>
         <div v-else-if="selectedCommand === 'SORT_TABLE'">
