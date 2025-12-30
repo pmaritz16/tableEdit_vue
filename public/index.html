@@ -481,6 +481,10 @@
         </div>
         <div v-else-if="selectedCommand === 'JOIN_TABLE'">
           <div class="form-group">
+            <label>New Table Name:</label>
+            <input type="text" v-model="commandParams.newName" />
+          </div>
+          <div class="form-group">
             <label>Table to Join:</label>
             <select v-model="commandParams.tableName1">
               <option value="">Select table</option>

@@ -69,7 +69,7 @@ createApp({
         case 'ADD_COLUMN':
           return this.commandParams.columnName && this.commandParams.expression;
         case 'JOIN_TABLE':
-          return this.commandParams.tableName1 && this.commandParams.joinColumn;
+          return this.commandParams.newName && this.commandParams.tableName1 && this.commandParams.joinColumn;
         case 'SORT_TABLE':
           return this.commandParams.columnName;
         case 'GROUP_TABLE':
@@ -280,8 +280,8 @@ createApp({
               this.tables[data.newTableName] = data.table;
             }
             this.tableNames = Object.keys(this.tables);
-            // Switch to the new table for COPY_TABLE, COLLAPSE_TABLE, GROUP_TABLE, and SPLICE_TABLES
-            if ((this.selectedCommand === 'COPY_TABLE' || this.selectedCommand === 'COLLAPSE_TABLE' || this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'SPLICE_TABLES') && data.table) {
+            // Switch to the new table for COPY_TABLE, COLLAPSE_TABLE, GROUP_TABLE, JOIN_TABLE, and SPLICE_TABLES
+            if ((this.selectedCommand === 'COPY_TABLE' || this.selectedCommand === 'COLLAPSE_TABLE' || this.selectedCommand === 'GROUP_TABLE' || this.selectedCommand === 'JOIN_TABLE' || this.selectedCommand === 'SPLICE_TABLES') && data.table) {
               this.currentTable = data.newTableName;
               this.currentTableData = data.table;
               this.$nextTick(() => {

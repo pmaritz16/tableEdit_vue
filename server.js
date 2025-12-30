@@ -287,10 +287,11 @@ async function loadCSVFiles(resetTables = false) {
 /**
  * Evaluates augmented expressions with support for:
  * - Arithmetic operations (+, -, *, /, ^)
+ * - Unary minus (-expression)
  * - Boolean operations (&&, ||, !)
- * - Comparisons (<, =, >)
+ * - Comparisons (<, =, >, !=)
  * - Conditional expressions (condition ? trueValue : falseValue)
- * - Special functions (BLANK, TODAY, DAY, MONTH, YEAR, NOW, LENGTH, APPEND, UPPER, TOTAL)
+ * - Special functions (BLANK, TODAY, DAY, MONTH, YEAR, NOW, LENGTH, APPEND, UPPER, TOTAL, REGEXP, CURR_ROW, NUM_ROWS)
  * - Field references and constants
  * 
  * @class ExpressionEvaluator
@@ -340,7 +341,9 @@ class ExpressionEvaluator {
       const trueExpr = expr.substring(questionIndex + 1, colonIndex).trim();
       const falseExpr = expr.substring(colonIndex + 1).trim();
       const condResult = this._evaluateExpression(condition);
-      return condResult && condResult !== 0 ? this._evaluateExpression(trueExpr) : this._evaluateExpression(falseExpr);
+      // Convert to number if it's a string representation of a number
+      const numResult = typeof condResult === 'string' ? parseFloat(condResult) : condResult;
+      return numResult && numResult !== 0 ? this._evaluateExpression(trueExpr) : this._evaluateExpression(falseExpr);
     }
     
     // Handle function calls FIRST (before parentheses processing)
@@ -383,13 +386,19 @@ class ExpressionEvaluator {
     // Order: ! (NOT) first, then && (AND), then || (OR)
     expr = this._handleBooleanOps(expr);
     
-    // Handle comparisons (<, =, >)
-    // Returns 1 if true, 0 if false
-    expr = this._handleComparisons(expr);
+    // Handle unary minus (-expression)
+    expr = this._handleUnaryMinus(expr);
     
     // Handle arithmetic operations (^, *, /, +, -)
     // Order: exponentiation, multiplication/division, addition/subtraction
-    return this._handleArithmetic(expr);
+    // Arithmetic must be processed BEFORE comparisons for correct operator precedence
+    expr = this._handleArithmetic(expr);
+    
+    // Handle comparisons (<, =, >, !=)
+    // Returns 1 if true, 0 if false
+    // INT and REAL can be compared with each other, TEXT only with TEXT
+    // Comparisons are processed AFTER arithmetic so expressions like "a < b - 1" work correctly
+    return this._handleComparisons(expr);
   }
   
   _handleFunctions(expr) {
@@ -478,6 +487,74 @@ class ExpressionEvaluator {
         }
         
         return total;
+      },
+      'REGEXP': (pattern, str) => {
+        // Apply regular expression pattern to string, return first match or ''
+        if (!pattern || !str) {
+          return '';
+        }
+        
+        // Remove quotes if present
+        const cleanPattern = typeof pattern === 'string' ? pattern.replace(/^"|"$/g, '') : String(pattern);
+        const cleanStr = typeof str === 'string' ? str.replace(/^"|"$/g, '') : String(str);
+        
+        try {
+          const regex = new RegExp(cleanPattern);
+          const match = cleanStr.match(regex);
+          return match ? match[0] : '';
+        } catch (error) {
+          // Invalid regex pattern, return empty string
+          return '';
+        }
+      },
+      'CURR_ROW': () => {
+        // Returns the index (0-based) of the current row in the table
+        if (!this.row || !this.currentTable) {
+          return 0;
+        }
+        
+        const table = this.tables[this.currentTable];
+        if (!table) {
+          return 0;
+        }
+        
+        // Find the current row index by comparing row objects
+        // First try reference equality (fastest)
+        const index = table.rows.indexOf(this.row);
+        if (index !== -1) {
+          return index;
+        }
+        
+        // If not found by reference, try to find by comparing all field values
+        for (let i = 0; i < table.rows.length; i++) {
+          const row = table.rows[i];
+          let matches = true;
+          for (const col of table.schema) {
+            if (row[col.name] !== this.row[col.name]) {
+              matches = false;
+              break;
+            }
+          }
+          if (matches) {
+            return i;
+          }
+        }
+        
+        // Row not found, return 0
+        return 0;
+      },
+      'NUM_ROWS': () => {
+        // Returns the number of rows in the current table
+        if (!this.currentTable) {
+          return 0;
+        }
+        
+        const table = this.tables[this.currentTable];
+        if (!table) {
+          return 0;
+        }
+        
+        return table.rows.length;
       }
     };
     
@@ -679,21 +756,117 @@ class ExpressionEvaluator {
   }
   
   _handleComparisons(expr) {
-    const ops = [
-      { pattern: /(\d+(?:\.\d+)?|"[^"]*")\s*<\s*(\d+(?:\.\d+)?|"[^"]*")/g, op: (a, b) => a < b },
-      { pattern: /(\d+(?:\.\d+)?|"[^"]*")\s*>\s*(\d+(?:\.\d+)?|"[^"]*")/g, op: (a, b) => a > b },
-      { pattern: /(\d+(?:\.\d+)?|"[^"]*")\s*=\s*(\d+(?:\.\d+)?|"[^"]*")/g, op: (a, b) => a == b }
-    ];
+    // Pattern to match values: numbers (with optional decimal, including negative) or quoted strings
+    // Also handles already-evaluated numeric expressions
+    const valuePattern = /(-?\d+(?:\.\d+)?|"[^"]*")/;
     
-    for (const { pattern, op } of ops) {
-      expr = expr.replace(pattern, (match, left, right) => {
-        const l = this._toComparable(left);
-        const r = this._toComparable(right);
-        return op(l, r) ? 1 : 0;
+    // Process comparisons in order: != first (to avoid matching = in !=), then <, >, =
+    // Use a loop to handle multiple comparisons in the expression
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 100) {
+      changed = false;
+      iterations++;
+      
+      // Handle != (must come before = to avoid matching = in !=)
+      // Note: valuePattern has a capturing group, so we get nested groups
+      // match[1] = left value, match[3] = right value (not match[2]!)
+      const notEqualPattern = new RegExp(`(${valuePattern.source})\\s*!=\\s*(${valuePattern.source})`, 'g');
+      expr = expr.replace(notEqualPattern, (match, ...args) => {
+        // Due to nested capturing groups: args[0]=left, args[1]=inner left, args[2]=right
+        const left = args[0];
+        const right = args[2];
+        changed = true;
+        return String(this._compareValues(left, right, '!='));
+      });
+      
+      // Handle <
+      const lessPattern = new RegExp(`(${valuePattern.source})\\s*<\\s*(${valuePattern.source})`, 'g');
+      expr = expr.replace(lessPattern, (match, ...args) => {
+        const left = args[0];
+        const right = args[2];
+        changed = true;
+        return String(this._compareValues(left, right, '<'));
+      });
+      
+      // Handle >
+      const greaterPattern = new RegExp(`(${valuePattern.source})\\s*>\\s*(${valuePattern.source})`, 'g');
+      expr = expr.replace(greaterPattern, (match, ...args) => {
+        const left = args[0];
+        const right = args[2];
+        changed = true;
+        return String(this._compareValues(left, right, '>'));
+      });
+      
+      // Handle = (must come after !=)
+      const equalPattern = new RegExp(`(${valuePattern.source})\\s*=\\s*(${valuePattern.source})`, 'g');
+      expr = expr.replace(equalPattern, (match, ...args) => {
+        const left = args[0];
+        const right = args[2];
+        changed = true;
+        return String(this._compareValues(left, right, '='));
       });
     }
     
     return expr;
+  }
+  
+  _compareValues(leftStr, rightStr, operator) {
+    // Determine if operands are strings or numbers
+    const leftIsString = typeof leftStr === 'string' && leftStr.startsWith('"') && leftStr.endsWith('"');
+    const rightIsString = typeof rightStr === 'string' && rightStr.startsWith('"') && rightStr.endsWith('"');
+    
+    // Check type compatibility: INT and REAL can be compared with each other, TEXT only with TEXT
+    if (leftIsString !== rightIsString) {
+      throw new Error(`Type mismatch: cannot compare ${leftIsString ? 'TEXT' : 'numeric'} with ${rightIsString ? 'TEXT' : 'numeric'}`);
+    }
+    
+    // Perform comparison
+    let result;
+    if (leftIsString) {
+      // TEXT comparison
+      const leftVal = leftStr.slice(1, -1);
+      const rightVal = rightStr.slice(1, -1);
+      switch (operator) {
+        case '<':
+          result = leftVal < rightVal;
+          break;
+        case '>':
+          result = leftVal > rightVal;
+          break;
+        case '=':
+          result = leftVal === rightVal;
+          break;
+        case '!=':
+          result = leftVal !== rightVal;
+          break;
+        default:
+          throw new Error(`Unknown comparison operator: ${operator}`);
+      }
+    } else {
+      // Numeric comparison (INT and REAL are compatible)
+      const leftNum = this._toNumber(leftStr);
+      const rightNum = this._toNumber(rightStr);
+      switch (operator) {
+        case '<':
+          result = leftNum < rightNum;
+          break;
+        case '>':
+          result = leftNum > rightNum;
+          break;
+        case '=':
+          result = leftNum === rightNum;
+          break;
+        case '!=':
+          result = leftNum !== rightNum;
+          break;
+        default:
+          throw new Error(`Unknown comparison operator: ${operator}`);
+      }
+    }
+    
+    // Return 1 if true, 0 if false (as number, not string)
+    return result ? 1 : 0;
   }
   
   _toComparable(val) {
@@ -701,6 +874,73 @@ class ExpressionEvaluator {
       return val.slice(1, -1);
     }
     return this._toNumber(val);
+  }
+  
+  _handleUnaryMinus(expr) {
+    // Handle unary minus: -expression
+    // This processes unary minus before binary arithmetic operations
+    // Pattern: - at start of expression or after operators/whitespace/parens, followed by a number or parenthesized expression
+    // Note: Handles cases like -Amount where Amount might be negative (results in --5 which becomes 5)
+    
+    let changed = true;
+    let iterations = 0;
+    
+    while (changed && iterations < 100) {
+      changed = false;
+      iterations++;
+      
+      // Match unary minus at start or after operators/whitespace/parens
+      // Look for: (start|operator|whitespace|paren) whitespace* - (number|negative number|parenthesized expression)
+      // This avoids matching binary subtraction (which has a number before the -)
+      // Note: number can be negative (e.g., --5 should become 5)
+      const unaryMinusPattern = /(^|[\s\+\-\*\/\^\(])\s*-\s*(-?\d+(?:\.\d+)?|\([^)]+\))/;
+      const match = expr.match(unaryMinusPattern);
+      
+      if (match) {
+        const beforeMinus = match[1]; // Character before minus (or empty string at start)
+        const value = match[2]; // Value to negate
+        
+        // Verify it's unary (not binary subtraction)
+        // If beforeMinus is empty (start) or is an operator/whitespace/paren, it's unary
+        const isUnary = match.index === 0 || /[\s\+\-\*\/\^\(]/.test(beforeMinus);
+        
+        if (isUnary) {
+          let negatedValue;
+          
+          // If value is in parentheses, evaluate the inner expression
+          if (value.startsWith('(') && value.endsWith(')')) {
+            const innerExpr = value.slice(1, -1);
+            const innerResult = this._evaluateExpression(innerExpr);
+            const innerNum = this._toNumber(String(innerResult));
+            negatedValue = -innerNum;
+          } else {
+            // It's a number (may be negative)
+            const num = parseFloat(value);
+            if (isNaN(num)) {
+              throw new Error(`Cannot apply unary minus to non-numeric value: ${value}`);
+            }
+            negatedValue = -num;
+          }
+          
+          // Replace the unary minus expression
+          // If beforeMinus is just whitespace or empty, don't include it in replacement
+          const prefix = (beforeMinus === '' || /^\s+$/.test(beforeMinus)) ? '' : beforeMinus;
+          const replacement = prefix + String(negatedValue);
+          const newExpr = expr.substring(0, match.index) + replacement + expr.substring(match.index + match[0].length);
+          
+          // Only mark as changed if the expression actually changed
+          if (newExpr !== expr) {
+            expr = newExpr;
+            changed = true;
+          } else {
+            // Expression didn't change, stop processing to avoid infinite loop
+            changed = false;
+          }
+        }
+      }
+    }
+    
+    return expr;
   }
   
   _handleArithmetic(expr) {
@@ -927,7 +1167,11 @@ app.post('/api/command', async (req, res) => {
         result = await addColumn(tableName, params.columnName, params.expression);
         break;
       case 'JOIN_TABLE':
-        result = await joinTable(tableName, params.tableName1, params.joinColumn);
+        if (!params || !params.newName) {
+          result = { success: false, error: 'New table name is required' };
+        } else {
+          result = await joinTable(tableName, params.tableName1, params.joinColumn, params.newName);
+        }
         break;
       case 'COPY_TABLE':
         if (!tableName) {
@@ -1340,19 +1584,30 @@ function checkExpressionForRealColumns(expression, table) {
  * Joins the current table with another table on a specified column.
  * For each row in the current table, finds matching rows in tableName1 and appends their columns.
  * If no match is found, blank values are appended.
+ * Creates a new table with the joined results.
  * 
  * @param {string} tableName - The current table name
  * @param {string} tableName1 - The table to join with
  * @param {string} joinColumn - The column name to join on (must exist in both tables)
- * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ * @param {string} newTableName - The name for the new joined table
+ * @returns {Promise<{success: boolean, error?: string, newTableName?: string, table?: Object}>}
  */
-async function joinTable(tableName, tableName1, joinColumn) {
+async function joinTable(tableName, tableName1, joinColumn, newTableName) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
   }
   
   if (!tables[tableName1]) {
     return { success: false, error: `Table ${tableName1} not found` };
+  }
+  
+  if (!newTableName) {
+    return { success: false, error: 'New table name is required' };
+  }
+  
+  // Check if new table name already exists
+  if (tables[newTableName]) {
+    return { success: false, error: `Table ${newTableName} already exists` };
   }
   
   const table = tables[tableName];
@@ -1375,16 +1630,23 @@ async function joinTable(tableName, tableName1, joinColumn) {
     }
   }
   
+  // Create a deep copy of the table for the new joined table
+  const newTable = {
+    schema: JSON.parse(JSON.stringify(table.schema)),
+    rows: JSON.parse(JSON.stringify(table.rows)),
+    originalFile: `${newTableName}.CSV`
+  };
+  
   // Add columns from table1 (except joinColumn)
   const newCols = table1.schema.filter(col => col.name !== joinColumn);
   for (const col of newCols) {
-    if (!table.schema.find(c => c.name === col.name)) {
-      table.schema.push(col);
+    if (!newTable.schema.find(c => c.name === col.name)) {
+      newTable.schema.push(JSON.parse(JSON.stringify(col)));
     }
   }
   
   // Join rows
-  for (const row of table.rows) {
+  for (const row of newTable.rows) {
     const key = String(row[joinColumn] || '');
     const match = lookup[key];
     if (match) {
@@ -1398,7 +1660,10 @@ async function joinTable(tableName, tableName1, joinColumn) {
     }
   }
   
-  return { success: true, table: serializeTable(table) };
+  // Store the new table
+  tables[newTableName] = newTable;
+  
+  return { success: true, newTableName: newTableName, table: serializeTable(newTable) };
 }
 
 /**
