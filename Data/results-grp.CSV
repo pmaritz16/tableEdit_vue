@@ -1,0 +1,41 @@
+Item:TEXT,New:REAL,tag:TEXT
+Express Checkout Payment: Deutsche Lufthansa AG,22714.7,Lufthansa
+Express Checkout Payment: Delta Air Lines INC,10013.5,Other Airline
+"Express Checkout Payment: Delta Air Lines 3,895.88 USD X 0.7045 (Exchange Rate)",3895.9,Other Airline
+General Payment: Bahia Tronco SA DE CV ID: 5C25190791168180R,1815.0,"Hotels, etc."
+"Express Checkout Payment: Ticketmaster, LLC",1408.0,Entertainment & Education
+PreApproved Payment Bill User Payment: Vote Vivian Song,1250.3,Miscellaneous
+Express Checkout Payment: American Airlines,953.0,Other Airline
+Express Checkout Payment: Eventim UK Ltd,790.4,Entertainment & Education
+PreApproved Payment Bill User Payment: The Financial Times Ltd,719.0,Entertainment & Education
+Donation Payment: Milo Foundation ID: 4P156818S0319171B,514.8,Miscellaneous
+General Payment: Aerostar Owners Association,450.0,Aircraft
+Express Checkout Payment: AEGEAN AIRLINES S.A.,345.6,Other Airline
+PreApproved Payment Bill User Payment: McAfee LLC,330.6,Computers & Software
+Express Checkout Payment: British Airways Plc,300.7,Other Airline
+PreApproved Payment Bill User Payment: The Economist Newspaper NA Inc,274.4,Entertainment & Education
+PreApproved Payment Bill User Payment: The New York Times Co.,263.0,Entertainment & Education
+Express Checkout Payment: TRAINLINE.COM LIMITED,229.3,"Hotels, etc."
+"Express Checkout Payment: DHL Express (USA), Inc.",226.4,Miscellaneous
+Express Checkout Payment: IMPERIAL WAR MUSEUM TRADING COMPANY,199.6,Miscellaneous
+"Express Checkout Payment: Delta Air Lines, Inc.",169.0,Other Airline
+Express Checkout Payment: Hanesbrands Inc,157.0,"Food, Dining, Clothing"
+PreApproved Payment Bill User Payment: Haaretz Daily Newspaper LTD,154.0,Entertainment & Education
+Express Checkout Payment: Hamrick Software,150.0,Computers & Software
+Express Checkout Payment: Temu.com ID: 7LJ49479BK462234M,144.2,Miscellaneous
+PreApproved Payment Bill User Payment: Bright Market LLC dba FastSpring,132.2,Miscellaneous
+PreApproved Payment Bill User Payment: Patreon,110.0,Entertainment & Education
+Express Checkout Payment: The Way Ahead Group Limited,65.4,Miscellaneous
+"PreApproved Payment Bill User Payment: The Week Publications, Inc",63.5,Entertainment & Education
+"PreApproved Payment Bill User Payment: Epoch.com, LLC",60.0,Miscellaneous
+PreApproved Payment Bill User Payment: Consumer Reports,43.0,Entertainment & Education
+Express Checkout Payment: Weee Inc ID: 0WX39611G5864913D,42.4,"Food, Dining, Clothing"
+Express Checkout Payment: Weee Inc ID: 6KX717955C9547155,42.0,"Food, Dining, Clothing"
+Express Checkout Payment: Weee Inc ID: 53S940456E3734737,37.9,Food & Dining
+Express Checkout Payment: Intelsat Inflight LLC,32.0,Computers & Software
+Express Checkout Payment: Paddle.com Market Limited,20.0,Miscellaneous
+Donation Payment: DANIEL-ADRIAN SAMOILA,10.7,Miscellaneous
+Payment Refund: Delta Air Lines INC ID: 05D03102H7963012L,-4.5,Other Airline
+Payment Refund: Deutsche Lufthansa AG ID: 4R546392V2453254E,-395.1,Lufthansa
+Payment Refund: Deutsche Lufthansa AG ID: 8V778232YK974380S,-2379.1,Lufthansa
+Payment Refund: Deutsche Lufthansa AG ID: 5FV43659YX287924K,-7815.3,Lufthansa

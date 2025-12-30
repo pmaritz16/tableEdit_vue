@@ -665,17 +665,129 @@ class ExpressionEvaluator {
       return key;
     });
     
-    // Protect numbers
-    expr = expr.replace(/\b\d+(?:\.\d+)?\b/g, (match) => {
-      const key = `__PROTECTED_${protectedIndex}__`;
-      protectedValues[protectedIndex] = match;
-      protectedIndex++;
-      return key;
-    });
+    // Handle field references with offsets: columnName[offset]
+    // This must be done BEFORE protecting numbers, so brackets are still visible
+    // Pattern: columnName[offset] where offset can be an expression
+    // Process from right to left to handle nested brackets correctly
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 100) {
+      changed = false;
+      iterations++;
+      
+      // Match columnName[offset] pattern
+      // The offset can contain brackets, so we need to match balanced brackets
+      // Find the rightmost [ that's not part of a protected value
+      // When searching backwards: ] means we need to find its opening [, [ means we found an opening
+      let bracketStart = -1;
+      let bracketDepth = 0;
+      for (let i = expr.length - 1; i >= 0; i--) {
+        // Skip if we're inside a protected value placeholder
+        if (expr.substring(Math.max(0, i - 15), i + 1).includes('__PROTECTED_')) {
+          continue;
+        }
+        
+        if (expr[i] === ']') {
+          // Closing bracket when searching backwards - we need to find its opening
+          bracketDepth++;
+        } else if (expr[i] === '[') {
+          if (bracketDepth > 0) {
+            // Found the opening bracket for a closing bracket we saw
+            bracketDepth--;
+            if (bracketDepth === 0) {
+              // This is the outermost opening bracket we want
+              bracketStart = i;
+              break;
+            }
+          }
+          // If bracketDepth is 0, this [ doesn't have a matching ], skip it
+        }
+      }
+      
+      if (bracketStart === -1) {
+        break; // No more indexed fields
+      }
+      
+      // Find the field name before the bracket
+      const beforeBracket = expr.substring(0, bracketStart);
+      const fieldNameMatch = beforeBracket.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+      if (!fieldNameMatch) {
+        break; // Not a field reference
+      }
+      
+      const fieldName = fieldNameMatch[1];
+      const fieldStart = bracketStart - fieldName.length;
+      
+      // Find the matching closing bracket
+      bracketDepth = 1;
+      let bracketEnd = bracketStart + 1;
+      for (let i = bracketStart + 1; i < expr.length; i++) {
+        if (expr[i] === '[') {
+          bracketDepth++;
+        } else if (expr[i] === ']') {
+          bracketDepth--;
+          if (bracketDepth === 0) {
+            bracketEnd = i;
+            break;
+          }
+        }
+      }
+      
+      if (bracketDepth !== 0) {
+        break; // Unmatched brackets
+      }
+      
+      const offsetExpr = expr.substring(bracketStart + 1, bracketEnd);
+      const matchStart = fieldStart;
+      const matchEnd = bracketEnd + 1;
+      
+      try {
+        // Evaluate the offset expression
+        const offsetResult = this._evaluateExpression(offsetExpr);
+        const offset = typeof offsetResult === 'string' ? parseFloat(offsetResult) : offsetResult;
+        
+        if (isNaN(offset)) {
+          throw new Error(`Invalid offset expression: ${offsetExpr}`);
+        }
+        
+        // Get the value from the offset row
+        const value = this._getFieldValueWithOffset(fieldName, Math.round(offset));
+        
+        if (value !== null && value !== undefined) {
+          const key = `__PROTECTED_${protectedIndex}__`;
+          protectedValues[protectedIndex] = typeof value === 'string' ? `"${value}"` : String(value);
+          protectedIndex++;
+          
+          // Replace the indexed field reference
+          expr = expr.substring(0, matchStart) + key + expr.substring(matchEnd);
+          changed = true;
+        } else {
+          // Field not found or out of bounds, replace with empty string
+          const key = `__PROTECTED_${protectedIndex}__`;
+          protectedValues[protectedIndex] = '""'; // Empty string
+          protectedIndex++;
+          expr = expr.substring(0, matchStart) + key + expr.substring(matchEnd);
+          changed = true;
+        }
+      } catch (error) {
+        // If offset evaluation fails, treat as regular field reference (offset 0)
+        const value = this._getFieldValue(fieldName);
+        if (value !== null && value !== undefined) {
+          const key = `__PROTECTED_${protectedIndex}__`;
+          protectedValues[protectedIndex] = typeof value === 'string' ? `"${value}"` : String(value);
+          protectedIndex++;
+          expr = expr.substring(0, matchStart) + key + expr.substring(matchEnd);
+          changed = true;
+        }
+      }
+    }
     
-    // Now replace field references
-    const fieldRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\b/g;
+    // Now replace regular field references (without offsets)
+    // Use a regex that excludes field names followed by [
+    const fieldRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\b(?!\s*\[)/g;
     expr = expr.replace(fieldRegex, (match, fieldName) => {
+      // Skip if this looks like it might be part of an indexed reference we already processed
+      // (though at this point, indexed references should already be replaced)
       const value = this._getFieldValue(fieldName);
       if (value !== null && value !== undefined) {
         const key = `__PROTECTED_${protectedIndex}__`;
@@ -692,6 +804,59 @@ class ExpressionEvaluator {
     }
     
     return expr;
+  }
+  
+  _getFieldValueWithOffset(fieldName, offset) {
+    // Get field value from a row offset by 'offset' from the current row
+    // offset > 0 means next rows, offset < 0 means previous rows, offset = 0 means current row
+    if (!this.row || !this.currentTable) {
+      return null;
+    }
+    
+    const table = this.tables[this.currentTable];
+    if (!table) {
+      return null;
+    }
+    
+    // Get current row index
+    let currentIndex = table.rows.indexOf(this.row);
+    if (currentIndex === -1) {
+      // Try to find by comparing field values
+      for (let i = 0; i < table.rows.length; i++) {
+        const row = table.rows[i];
+        let matches = true;
+        for (const col of table.schema) {
+          if (row[col.name] !== this.row[col.name]) {
+            matches = false;
+            break;
+          }
+        }
+        if (matches) {
+          currentIndex = i;
+          break;
+        }
+      }
+    }
+    
+    if (currentIndex === -1) {
+      return null; // Current row not found
+    }
+    
+    // Calculate target row index
+    const targetIndex = currentIndex + offset;
+    
+    // Check bounds
+    if (targetIndex < 0 || targetIndex >= table.rows.length) {
+      return null; // Out of bounds
+    }
+    
+    // Get value from target row
+    const targetRow = table.rows[targetIndex];
+    if (targetRow && targetRow.hasOwnProperty(fieldName)) {
+      return targetRow[fieldName];
+    }
+    
+    return null;
   }
   
   _getFieldValue(fieldName) {
@@ -756,6 +921,11 @@ class ExpressionEvaluator {
   }
   
   _handleComparisons(expr) {
+    // Ensure expr is a string (defensive check)
+    if (typeof expr !== 'string') {
+      expr = String(expr);
+    }
+    
     // Pattern to match values: numbers (with optional decimal, including negative) or quoted strings
     // Also handles already-evaluated numeric expressions
     const valuePattern = /(-?\d+(?:\.\d+)?|"[^"]*")/;
@@ -984,13 +1154,16 @@ class ExpressionEvaluator {
     }
     
     // Clean up string quotes and convert to number if possible
-    if (expr.startsWith('"') && expr.endsWith('"')) {
+    // Only strip quotes if the entire expression is just a quoted string (no operators)
+    // This prevents stripping quotes from expressions like "USD" = "USD"
+    if (expr.startsWith('"') && expr.endsWith('"') && !expr.includes('=') && !expr.includes('<') && !expr.includes('>') && !expr.includes('!') && !expr.includes('+') && !expr.includes('-') && !expr.includes('*') && !expr.includes('/') && !expr.includes('^')) {
       return expr.slice(1, -1);
     }
     
     const num = parseFloat(expr);
     if (!isNaN(num) && expr.trim() === String(num)) {
-      return num;
+      // Return as string to ensure compatibility with subsequent operations
+      return String(num);
     }
     
     return expr;
@@ -1164,7 +1337,11 @@ app.post('/api/command', async (req, res) => {
         result = await replaceText(tableName, params.columnName, params.regex, params.replacement);
         break;
       case 'ADD_COLUMN':
-        result = await addColumn(tableName, params.columnName, params.expression);
+        if (!params || !params.columnType) {
+          result = { success: false, error: 'Column type is required' };
+        } else {
+          result = await addColumn(tableName, params.columnName, params.expression, params.columnType);
+        }
         break;
       case 'JOIN_TABLE':
         if (!params || !params.newName) {
@@ -1272,8 +1449,16 @@ async function saveTable(tableName) {
   for (const row of table.rows) {
     const values = table.schema.map(col => {
       let value = row[col.name];
-      if (col.type === 'REAL' && typeof value === 'number') {
-        value = value.toFixed(2);
+      if (col.type === 'REAL') {
+        if (typeof value === 'number') {
+          value = value.toFixed(1);
+        } else if (typeof value === 'string') {
+          // Handle string values that represent REAL numbers
+          const num = parseFloat(value);
+          if (!isNaN(num)) {
+            value = num.toFixed(1);
+          }
+        }
       } else if (value === null || value === undefined) {
         value = '';
       }
@@ -1382,10 +1567,37 @@ async function deleteRow(tableName, expression) {
   
   for (const row of table.rows) {
     evaluator.row = row;
-    const result = evaluator.evaluate(expression);
-    // Keep rows where expression evaluates to false (zero)
-    // Delete rows where expression evaluates to true (non-zero)
-    if (!result || result === 0) {
+    try {
+      const result = evaluator.evaluate(expression);
+      // Convert result to number for proper truthiness check
+      // Keep rows where expression evaluates to false (zero)
+      // Delete rows where expression evaluates to true (non-zero)
+      // Convert result to number for proper truthiness check
+      let numResult;
+      if (typeof result === 'string') {
+        // Remove quotes if present
+        const cleanResult = result.replace(/^"|"$/g, '');
+        numResult = parseFloat(cleanResult);
+        // If it's a non-numeric string, keep the row (safe default - don't delete on unexpected result)
+        if (isNaN(numResult)) {
+          // Non-numeric string result - keep the row to be safe
+          filteredRows.push(row);
+          continue;
+        }
+      } else {
+        numResult = result;
+      }
+      
+      // Keep rows where result is 0 (false), delete rows where result is non-zero (true)
+      // numResult === 0 means expression is false, so keep the row
+      // numResult !== 0 means expression is true, so delete the row (don't add to filteredRows)
+      if (numResult === 0) {
+        filteredRows.push(row);
+      }
+      // If numResult is non-zero, the row is deleted (not added to filteredRows)
+    } catch (error) {
+      // If evaluation fails, keep the row (don't delete on error)
+      await logError(`Error evaluating DELETE_ROWS expression for row`, error);
       filteredRows.push(row);
     }
   }
@@ -1501,62 +1713,32 @@ async function replaceText(tableName, columnName, regex, replacement) {
 
 /**
  * Adds a new column to a table with values computed from an expression.
- * Column type is automatically determined (TEXT, INT, or REAL) based on expression results.
+ * Column type is specified by the user.
  * 
  * @param {string} tableName - The name of the table
  * @param {string} columnName - The name of the new column
  * @param {string} expression - The augmented expression to evaluate for each row
+ * @param {string} columnType - The type of the column (TEXT, INT, or REAL)
  * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
  */
-async function addColumn(tableName, columnName, expression) {
+async function addColumn(tableName, columnName, expression, columnType) {
   if (!tables[tableName]) {
     return { success: false, error: `Table ${tableName} not found` };
   }
   
+  if (!columnType || !['TEXT', 'INT', 'REAL'].includes(columnType)) {
+    return { success: false, error: 'Invalid column type. Must be TEXT, INT, or REAL' };
+  }
+  
   const table = tables[tableName];
   
-  // Determine type from expression evaluation
-  // Check multiple rows to see if result is always integer or could be real
-  const evaluator = new ExpressionEvaluator(null, tables, tableName);
-  let colType = 'TEXT';
-  let hasNonInteger = false;
-  let hasNumber = false;
-  
-  // Check up to 10 sample rows to determine type
-  const sampleSize = Math.min(10, table.rows.length);
-  for (let i = 0; i < sampleSize; i++) {
-    evaluator.row = table.rows[i];
-    try {
-      const sampleResult = evaluator.evaluate(expression);
-      if (typeof sampleResult === 'number') {
-        hasNumber = true;
-        if (!Number.isInteger(sampleResult)) {
-          hasNonInteger = true;
-          break; // Found a non-integer, definitely REAL
-        }
-      }
-    } catch (error) {
-      // Skip rows that cause errors, they'll be handled during full evaluation
-    }
-  }
-  
-  // Also check if expression involves REAL columns by checking if it contains division or references REAL columns
-  if (hasNumber && !hasNonInteger) {
-    // Check if expression might produce REAL values (contains division, or references REAL columns)
-    const hasDivision = expression.includes('/');
-    const hasRealColumns = checkExpressionForRealColumns(expression, table);
-    
-    if (hasDivision || hasRealColumns) {
-      hasNonInteger = true; // Treat as REAL if division or REAL columns are involved
-    }
-  }
-  
-  if (hasNumber) {
-    colType = hasNonInteger ? 'REAL' : 'INT';
-  }
+  // Use the user-specified column type
+  const colType = columnType;
   
   table.schema.push({ name: columnName, type: colType });
   
+  // Evaluate expression for each row
+  const evaluator = new ExpressionEvaluator(null, tables, tableName);
   for (const row of table.rows) {
     evaluator.row = row;
     const value = evaluator.evaluate(expression);

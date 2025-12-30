@@ -67,7 +67,7 @@ createApp({
         case 'COLLAPSE_TABLE':
           return this.commandParams.newName; // newName is required
         case 'ADD_COLUMN':
-          return this.commandParams.columnName && this.commandParams.expression;
+          return this.commandParams.columnName && this.commandParams.columnType && this.commandParams.expression;
         case 'JOIN_TABLE':
           return this.commandParams.newName && this.commandParams.tableName1 && this.commandParams.joinColumn;
         case 'SORT_TABLE':
@@ -166,10 +166,10 @@ createApp({
       }
     },
     formatReal(value) {
-      if (value === null || value === undefined) return '0.00';
+      if (value === null || value === undefined) return '0.0';
       const num = parseFloat(value);
-      if (isNaN(num)) return '0.00';
-      return num.toFixed(2);
+      if (isNaN(num)) return '0.0';
+      return num.toFixed(1);
     },
     selectRow(index) {
       this.selectedRowIndex = index;
@@ -531,6 +531,7 @@ createApp({
           this.commandLoggingEnabled = false;
           await this.loadTables();
           await this.replayCommands();
+          await this.loadTags();
           alert('Application restarted');
         }
       } catch (error) {

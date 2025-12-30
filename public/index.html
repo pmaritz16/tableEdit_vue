@@ -475,6 +475,15 @@
             <input type="text" v-model="commandParams.columnName" />
           </div>
           <div class="form-group">
+            <label>Column Type:</label>
+            <select v-model="commandParams.columnType">
+              <option value="">Select type</option>
+              <option value="TEXT">TEXT</option>
+              <option value="INT">INT</option>
+              <option value="REAL">REAL</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label>Expression:</label>
             <input type="text" v-model="commandParams.expression" placeholder="e.g., Price * Quantity" />
           </div>

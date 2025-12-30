@@ -1,0 +1,1 @@
+GROUP_TABLE results-adj {"newName":"results-grp","groupColumn":"Item","columns":["New"]}
