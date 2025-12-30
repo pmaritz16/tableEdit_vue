@@ -983,20 +983,15 @@ class ExpressionEvaluator {
   
   _compareValues(leftStr, rightStr, operator) {
     // Determine if operands are strings or numbers
+    // A value is a string (TEXT) if it's quoted with double quotes
     const leftIsString = typeof leftStr === 'string' && leftStr.startsWith('"') && leftStr.endsWith('"');
     const rightIsString = typeof rightStr === 'string' && rightStr.startsWith('"') && rightStr.endsWith('"');
     
-    // Check type compatibility: INT and REAL can be compared with each other, TEXT only with TEXT
-    if (leftIsString !== rightIsString) {
-      throw new Error(`Type mismatch: cannot compare ${leftIsString ? 'TEXT' : 'numeric'} with ${rightIsString ? 'TEXT' : 'numeric'}`);
-    }
-    
-    // Perform comparison
-    let result;
-    if (leftIsString) {
-      // TEXT comparison
+    // If both are quoted strings, do TEXT comparison
+    if (leftIsString && rightIsString) {
       const leftVal = leftStr.slice(1, -1);
       const rightVal = rightStr.slice(1, -1);
+      let result;
       switch (operator) {
         case '<':
           result = leftVal < rightVal;
@@ -1013,10 +1008,20 @@ class ExpressionEvaluator {
         default:
           throw new Error(`Unknown comparison operator: ${operator}`);
       }
-    } else {
-      // Numeric comparison (INT and REAL are compatible)
-      const leftNum = this._toNumber(leftStr);
-      const rightNum = this._toNumber(rightStr);
+      return result ? 1 : 0;
+    }
+    
+    // Check if both are numeric (even if one is quoted and one is not, or both are unquoted)
+    // This handles cases like "50.5" (unquoted numeric string from REAL/INT field) vs "100.0" (unquoted numeric literal)
+    // Also handles cases where a numeric value might be in quotes but is still numeric
+    const leftNum = parseFloat(leftIsString ? leftStr.slice(1, -1) : leftStr);
+    const rightNum = parseFloat(rightIsString ? rightStr.slice(1, -1) : rightStr);
+    const leftIsNumeric = !isNaN(leftNum) && isFinite(leftNum) && leftStr.trim() !== '';
+    const rightIsNumeric = !isNaN(rightNum) && isFinite(rightNum) && rightStr.trim() !== '';
+    
+    // If both are numeric, do numeric comparison (regardless of whether they're quoted)
+    if (leftIsNumeric && rightIsNumeric) {
+      let result;
       switch (operator) {
         case '<':
           result = leftNum < rightNum;
@@ -1033,9 +1038,38 @@ class ExpressionEvaluator {
         default:
           throw new Error(`Unknown comparison operator: ${operator}`);
       }
+      return result ? 1 : 0;
     }
     
-    // Return 1 if true, 0 if false (as number, not string)
+    // If one is quoted and one is not, and they're not both numeric, that's a type mismatch
+    if (leftIsString !== rightIsString) {
+      throw new Error(`Type mismatch: cannot compare ${leftIsString ? 'TEXT' : 'numeric'} with ${rightIsString ? 'TEXT' : 'numeric'}`);
+    }
+    
+    // One is numeric, one is not - this is an error
+    if (leftIsNumeric || rightIsNumeric) {
+      throw new Error(`Type mismatch: cannot compare ${leftIsNumeric ? 'numeric' : 'TEXT'} with ${rightIsNumeric ? 'numeric' : 'TEXT'}`);
+    }
+    
+    // Neither is numeric and neither is quoted - treat as TEXT comparison
+    // This handles edge cases where both are non-numeric strings
+    let result;
+    switch (operator) {
+      case '<':
+        result = leftStr < rightStr;
+        break;
+      case '>':
+        result = leftStr > rightStr;
+        break;
+      case '=':
+        result = leftStr === rightStr;
+        break;
+      case '!=':
+        result = leftStr !== rightStr;
+        break;
+      default:
+        throw new Error(`Unknown comparison operator: ${operator}`);
+    }
     return result ? 1 : 0;
   }
   
@@ -1258,11 +1292,13 @@ app.post('/api/restart', async (req, res) => {
  * Supported commands:
  * - SAVE_TABLE: Save table to CSV file
  * - DROP_COLUMNS: Remove multiple columns from the table
+ * - RENAME_COLUMN: Rename a column in the table
  * - RENAME_TABLE: Rename the table
  * - DELETE_ROWS: Delete rows matching an expression
  * - COLLAPSE_TABLE: Group and sum numeric columns
  * - REPLACE_TEXT: Replace text in a TEXT column using regex
  * - ADD_COLUMN: Add a column with values from an expression
+ * - SET_VALUE: Set the value of an existing column using an expression
  * - JOIN_TABLE: Join two tables on a specified column
  * - COPY_TABLE: Copy table to a new name
  * - SORT_TABLE: Sort table by column and order
@@ -1320,6 +1356,9 @@ app.post('/api/command', async (req, res) => {
       case 'DROP_COLUMNS':
         result = await dropColumns(tableName, params.columns);
         break;
+      case 'RENAME_COLUMN':
+        result = await renameColumn(tableName, params.oldColumnName, params.newColumnName);
+        break;
       case 'RENAME_TABLE':
         result = await renameTable(tableName, params.newName);
         break;
@@ -1342,6 +1381,9 @@ app.post('/api/command', async (req, res) => {
         } else {
           result = await addColumn(tableName, params.columnName, params.expression, params.columnType);
         }
+        break;
+      case 'SET_VALUE':
+        result = await setValue(tableName, params.columnName, params.expression);
         break;
       case 'JOIN_TABLE':
         if (!params || !params.newName) {
@@ -1522,6 +1564,56 @@ async function dropColumns(tableName, columns) {
       delete row[colName];
     }
   }
+  
+  return { success: true, table: serializeTable(table) };
+}
+
+/**
+ * Renames a column in a table.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} oldColumnName - The current column name
+ * @param {string} newColumnName - The new column name
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function renameColumn(tableName, oldColumnName, newColumnName) {
+  if (!tables[tableName]) {
+    return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  if (!oldColumnName || !newColumnName) {
+    return { success: false, error: 'Both old and new column names are required' };
+  }
+  
+  if (oldColumnName === newColumnName) {
+    return { success: false, error: 'Old and new column names must be different' };
+  }
+  
+  const table = tables[tableName];
+  
+  // Find the column in schema
+  const columnIndex = table.schema.findIndex(col => col.name === oldColumnName);
+  if (columnIndex === -1) {
+    return { success: false, error: `Column ${oldColumnName} not found` };
+  }
+  
+  // Check if new column name already exists
+  if (table.schema.some(col => col.name === newColumnName)) {
+    return { success: false, error: `Column ${newColumnName} already exists` };
+  }
+  
+  // Update schema
+  table.schema[columnIndex].name = newColumnName;
+  
+  // Update all rows
+  for (const row of table.rows) {
+    if (oldColumnName in row) {
+      row[newColumnName] = row[oldColumnName];
+      delete row[oldColumnName];
+    }
+  }
+  
+  await logAction(`Renamed column ${oldColumnName} to ${newColumnName} in table ${tableName}`);
   
   return { success: true, table: serializeTable(table) };
 }
@@ -1744,6 +1836,49 @@ async function addColumn(tableName, columnName, expression, columnType) {
     const value = evaluator.evaluate(expression);
     row[columnName] = value;
   }
+  
+  return { success: true, table: serializeTable(table) };
+}
+
+/**
+ * Sets the value of an existing column in a table using an augmented expression.
+ * Evaluates the expression for each row and updates the column's value.
+ * 
+ * @param {string} tableName - The name of the table
+ * @param {string} columnName - The name of the column to update
+ * @param {string} expression - The augmented expression to evaluate for each row
+ * @returns {Promise<{success: boolean, error?: string, table?: Object}>}
+ */
+async function setValue(tableName, columnName, expression) {
+  if (!tables[tableName]) {
+    return { success: false, error: `Table ${tableName} not found` };
+  }
+  
+  if (!columnName) {
+    return { success: false, error: 'Column name is required' };
+  }
+  
+  if (!expression) {
+    return { success: false, error: 'Expression is required' };
+  }
+  
+  const table = tables[tableName];
+  
+  // Verify column exists
+  const column = table.schema.find(col => col.name === columnName);
+  if (!column) {
+    return { success: false, error: `Column ${columnName} not found` };
+  }
+  
+  // Evaluate expression for each row
+  const evaluator = new ExpressionEvaluator(null, tables, tableName);
+  for (const row of table.rows) {
+    evaluator.row = row;
+    const value = evaluator.evaluate(expression);
+    row[columnName] = value;
+  }
+  
+  await logAction(`Set values for column ${columnName} in table ${tableName} using expression: ${expression}`);
   
   return { success: true, table: serializeTable(table) };
 }

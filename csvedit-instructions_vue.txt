@@ -62,6 +62,7 @@ The program should offer the user a menu of commands to manipulate the tables:
 	and commas should be stripped out before conversion. If the fields are not numeric, they should be left unchanged.
 - SPLICE_TABLES: this should create a new table, name specified by the user, by showing the user a drop down of existing tables, allowing the user to check selected
 	tables, and then adding the rows of all selected tables to the new table. If the schemas of the tables selected do not match, generate an error.
+- SET_VALUE: this should set the value of a column, specified by the user, to an augmented expression.
 
 The above commands should be offered as a drop down menu, sorted in alphabetical order.
 	

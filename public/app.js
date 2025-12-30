@@ -35,9 +35,11 @@ createApp({
         'GROUP_TABLE',
         'JOIN_TABLE',
         'REORDER_COLUMNS',
+        'RENAME_COLUMN',
         'RENAME_TABLE',
         'REPLACE_TEXT',
         'SAVE_TABLE',
+        'SET_VALUE',
         'SORT_TABLE',
         'SPLICE_TABLES'
       ]
@@ -59,6 +61,8 @@ createApp({
           return this.commandParams.selectedColumns && this.commandParams.selectedColumns.length > 0;
         case 'REPLACE_TEXT':
           return this.commandParams.columnName;
+        case 'RENAME_COLUMN':
+          return this.commandParams.oldColumnName && this.commandParams.newColumnName;
         case 'RENAME_TABLE':
         case 'COPY_TABLE':
           return this.commandParams.newName;
@@ -68,6 +72,8 @@ createApp({
           return this.commandParams.newName; // newName is required
         case 'ADD_COLUMN':
           return this.commandParams.columnName && this.commandParams.columnType && this.commandParams.expression;
+        case 'SET_VALUE':
+          return this.commandParams.columnName && this.commandParams.expression;
         case 'JOIN_TABLE':
           return this.commandParams.newName && this.commandParams.tableName1 && this.commandParams.joinColumn;
         case 'SORT_TABLE':
@@ -184,6 +190,11 @@ createApp({
         // Initialize selectedColumns as empty array for DROP_COLUMNS
         if (this.selectedCommand === 'DROP_COLUMNS') {
           this.commandParams.selectedColumns = [];
+        }
+        // Initialize column name fields for RENAME_COLUMN
+        if (this.selectedCommand === 'RENAME_COLUMN') {
+          this.commandParams.oldColumnName = '';
+          this.commandParams.newColumnName = '';
         }
         this.commandError = '';
         this.commandSuccess = '';

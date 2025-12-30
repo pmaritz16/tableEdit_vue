@@ -427,6 +427,21 @@
             <small>Select one or more columns to remove from the table.</small>
           </div>
         </div>
+        <div v-else-if="selectedCommand === 'RENAME_COLUMN'">
+          <div class="form-group">
+            <label>Old Column Name:</label>
+            <select v-model="commandParams.oldColumnName">
+              <option value="">Select a column...</option>
+              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">
+                {{ col.name }} ({{ col.type }})
+              </option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>New Column Name:</label>
+            <input type="text" v-model="commandParams.newColumnName" />
+          </div>
+        </div>
         <div v-else-if="selectedCommand === 'RENAME_TABLE'">
           <div class="form-group">
             <label>New Table Name:</label>
@@ -481,6 +496,21 @@
               <option value="TEXT">TEXT</option>
               <option value="INT">INT</option>
               <option value="REAL">REAL</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Expression:</label>
+            <input type="text" v-model="commandParams.expression" placeholder="e.g., Price * Quantity" />
+          </div>
+        </div>
+        <div v-else-if="selectedCommand === 'SET_VALUE'">
+          <div class="form-group">
+            <label>Column Name:</label>
+            <select v-model="commandParams.columnName">
+              <option value="">Select a column...</option>
+              <option v-for="col in currentTableData?.schema" :key="col.name" :value="col.name">
+                {{ col.name }} ({{ col.type }})
+              </option>
             </select>
           </div>
           <div class="form-group">
