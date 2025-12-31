@@ -463,13 +463,80 @@ class ExpressionEvaluator {
         return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
       },
       'LENGTH': (str) => {
-        return String(str).length;
+        // Resolve field reference if str is a field name
+        let val;
+        if (typeof str === 'string') {
+          // If it's a quoted string (single or double), extract the content
+          if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+            val = str.slice(1, -1);
+          } else {
+            // Try to get field value by name
+            val = this._getFieldValue(str);
+            // If field not found, treat the string itself as the value
+            if (val === null) {
+              val = str;
+            }
+          }
+        } else {
+          val = str;
+        }
+        return String(val).length;
       },
       'APPEND': (str1, str2) => {
-        return String(str1) + String(str2);
+        // Resolve field references if arguments are field names
+        let val1, val2;
+        
+        // Resolve str1
+        if (typeof str1 === 'string') {
+          // Handle both single and double quotes
+          if ((str1.startsWith('"') && str1.endsWith('"')) || (str1.startsWith("'") && str1.endsWith("'"))) {
+            val1 = str1.slice(1, -1);
+          } else {
+            val1 = this._getFieldValue(str1);
+            if (val1 === null) {
+              val1 = str1;
+            }
+          }
+        } else {
+          val1 = str1;
+        }
+        
+        // Resolve str2
+        if (typeof str2 === 'string') {
+          // Handle both single and double quotes
+          if ((str2.startsWith('"') && str2.endsWith('"')) || (str2.startsWith("'") && str2.endsWith("'"))) {
+            val2 = str2.slice(1, -1);
+          } else {
+            val2 = this._getFieldValue(str2);
+            if (val2 === null) {
+              val2 = str2;
+            }
+          }
+        } else {
+          val2 = str2;
+        }
+        
+        return String(val1) + String(val2);
       },
       'UPPER': (str) => {
-        return String(str).toUpperCase();
+        // Resolve field reference if str is a field name
+        let val;
+        if (typeof str === 'string') {
+          // If it's a quoted string (single or double), extract the content
+          if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+            val = str.slice(1, -1);
+          } else {
+            // Try to get field value by name
+            val = this._getFieldValue(str);
+            // If field not found, treat the string itself as the value
+            if (val === null) {
+              val = str;
+            }
+          }
+        } else {
+          val = str;
+        }
+        return String(val).toUpperCase();
       },
       'TOTAL': (tableName, columnName) => {
         // Get the table and sum all values in the specified column
@@ -2739,7 +2806,9 @@ app.post('/api/rules/run', async (req, res) => {
           row[rule.columnName] = value;
         } else if (rule.operation === 'CHECK') {
           const result = evaluator.evaluate(rule.expression);
-          if (!result || result === 0) {
+          // Convert result to number for proper truthiness check (handles string "0" vs number 0)
+          const numResult = typeof result === 'string' ? parseFloat(result) : Number(result);
+          if (!numResult || numResult === 0 || isNaN(numResult)) {
             errors.push(rule.columnName);
           }
         }
@@ -2893,7 +2962,7 @@ app.get('/api/row/init/:tableName', async (req, res) => {
       }
     }
     
-    // Run INIT rules
+    // Run INIT rules ONLY - this is called when opening the ADD modal
     const rules = await loadRules(fileName);
     await logAction(`Loading rules for ${fileName}, found ${rules.length} rules`);
     const initRules = rules.filter(r => r.operation === 'INIT');
@@ -2979,7 +3048,7 @@ app.post('/api/row/add', async (req, res) => {
       return res.json({ success: false, errors });
     }
     
-    // Run FIXUP rules
+    // Run FIXUP rules ONLY (not INIT, not CHECK yet)
     const fixupRules = rules.filter(r => r.operation === 'FIXUP');
     for (const rule of fixupRules) {
       try {
@@ -2999,8 +3068,10 @@ app.post('/api/row/add', async (req, res) => {
         evaluator.row = row;
         await logAction(`Executing CHECK rule: ${rule.columnName} - expression: ${rule.expression}, current value: ${row[rule.columnName]}`);
         const result = evaluator.evaluate(rule.expression);
-        await logAction(`CHECK rule result for ${rule.columnName}: ${result} (type: ${typeof result}, truthy: ${!!result})`);
-        if (!result || result === 0) {
+        // Convert result to number for proper truthiness check (handles string "0" vs number 0)
+        const numResult = typeof result === 'string' ? parseFloat(result) : Number(result);
+        await logAction(`CHECK rule result for ${rule.columnName}: ${result} (type: ${typeof result}, truthy: ${!!numResult})`);
+        if (!numResult || numResult === 0 || isNaN(numResult)) {
           await logAction(`CHECK rule FAILED for ${rule.columnName}: expression returned ${result}`);
           errors.push(rule.columnName);
         } else {
@@ -3023,6 +3094,107 @@ app.post('/api/row/add', async (req, res) => {
     res.json({ success: true, table: serializeTable(table) });
   } catch (error) {
     await logError('Failed to add row', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Validate row (run FIXUP and CHECK rules without adding)
+app.post('/api/row/validate', async (req, res) => {
+  const { tableName, row } = req.body;
+  
+  try {
+    if (!tables[tableName]) {
+      return res.json({ success: false, error: `Table ${tableName} not found` });
+    }
+    
+    const table = tables[tableName];
+    const fileName = path.basename(table.originalFile, path.extname(table.originalFile));
+    
+    // Create a copy of the row to avoid modifying the original
+    const rowCopy = { ...row };
+    
+    // Initialize row with default values if not provided
+    for (const col of table.schema) {
+      if (rowCopy[col.name] === undefined || rowCopy[col.name] === null) {
+        switch (col.type) {
+          case 'INT':
+            rowCopy[col.name] = 0;
+            break;
+          case 'REAL':
+            rowCopy[col.name] = 0.0;
+            break;
+          default:
+            rowCopy[col.name] = '';
+        }
+      }
+    }
+    
+    // Validate types
+    const rules = await loadRules(fileName);
+    const evaluator = new ExpressionEvaluator(rowCopy, tables, tableName);
+    const errors = [];
+    
+    for (const col of table.schema) {
+      const value = rowCopy[col.name];
+      if (col.type === 'INT') {
+        const intVal = parseInt(value, 10);
+        if (isNaN(intVal) || !Number.isInteger(parseFloat(value))) {
+          errors.push(col.name);
+        } else {
+          rowCopy[col.name] = intVal;
+        }
+      } else if (col.type === 'REAL') {
+        const realVal = parseFloat(value);
+        if (isNaN(realVal)) {
+          errors.push(col.name);
+        } else {
+          rowCopy[col.name] = realVal;
+        }
+      } else {
+        rowCopy[col.name] = String(value || '');
+      }
+    }
+    
+    if (errors.length > 0) {
+      return res.json({ success: false, errors, row: rowCopy });
+    }
+    
+    // Run FIXUP rules
+    const fixupRules = rules.filter(r => r.operation === 'FIXUP');
+    for (const rule of fixupRules) {
+      try {
+        evaluator.row = rowCopy;
+        const value = evaluator.evaluate(rule.expression);
+        rowCopy[rule.columnName] = value;
+      } catch (error) {
+        errors.push(rule.columnName);
+      }
+    }
+    
+    // Run CHECK rules
+    const checkRules = rules.filter(r => r.operation === 'CHECK');
+    for (const rule of checkRules) {
+      try {
+        evaluator.row = rowCopy;
+        const result = evaluator.evaluate(rule.expression);
+        // Convert result to number for proper truthiness check (handles string "0" vs number 0)
+        const numResult = typeof result === 'string' ? parseFloat(result) : Number(result);
+        if (!numResult || numResult === 0 || isNaN(numResult)) {
+          errors.push(rule.columnName);
+        }
+      } catch (error) {
+        errors.push(rule.columnName);
+      }
+    }
+    
+    // Return the updated row (with FIXUP applied) and any errors
+    res.json({ 
+      success: errors.length === 0, 
+      errors: errors.length > 0 ? errors : undefined,
+      row: rowCopy  // Return row with FIXUP changes applied
+    });
+  } catch (error) {
+    await logError('Failed to validate row', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -3089,7 +3261,9 @@ app.post('/api/row/update', async (req, res) => {
       try {
         evaluator.row = row;
         const result = evaluator.evaluate(rule.expression);
-        if (!result || result === 0) {
+        // Convert result to number for proper truthiness check (handles string "0" vs number 0)
+        const numResult = typeof result === 'string' ? parseFloat(result) : Number(result);
+        if (!numResult || numResult === 0 || isNaN(numResult)) {
           errors.push(rule.columnName);
         }
       } catch (error) {

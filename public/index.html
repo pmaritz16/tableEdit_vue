@@ -240,6 +240,25 @@
       margin-top: 0.5rem;
     }
     
+    .validation-message {
+      font-size: 0.9rem;
+      margin-top: 0.5rem;
+      padding: 0.5rem;
+      border-radius: 4px;
+    }
+    
+    .validation-message.validation-success {
+      color: #27ae60;
+      background-color: #d5f4e6;
+      border: 1px solid #27ae60;
+    }
+    
+    .validation-message.validation-error {
+      color: #e74c3c;
+      background-color: #fadbd8;
+      border: 1px solid #e74c3c;
+    }
+    
     .success-message {
       color: #27ae60;
       font-size: 0.9rem;
@@ -636,8 +655,10 @@
           />
         </div>
         <div v-if="rowError" class="error-message">{{ rowError }}</div>
+        <div v-if="rowValidationMessage && !rowError" class="validation-message" :class="{ 'validation-success': rowValidationMessage.includes('✅'), 'validation-error': rowValidationMessage.includes('❌') }">{{ rowValidationMessage }}</div>
         <div style="margin-top: 1rem; display: flex; gap: 0.5rem; justify-content: flex-end;">
-          <button @click="closeRowModal">Cancel</button>
+          <button @click="cancelRowModal">Cancel</button>
+          <button v-if="rowModalMode === 'add'" @click="validateRow" style="background-color: #4CAF50; color: white;">Validate</button>
           <button @click="saveRow">{{ rowModalMode === 'add' ? 'Add' : 'Save' }}</button>
         </div>
       </div>

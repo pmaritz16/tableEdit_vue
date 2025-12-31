@@ -18,6 +18,7 @@ createApp({
       rowData: {},
       rowErrors: [],
       rowError: '',
+      rowValidationMessage: '',
       commandLoggingEnabled: false,
       tableWidth: 0,
       tags: [],
@@ -342,6 +343,7 @@ createApp({
       this.rowData = {};
       this.rowErrors = [];
       this.rowError = '';
+      this.rowValidationMessage = '';
       
       // Get initialized row from server (with INIT rules applied)
       try {
@@ -407,6 +409,7 @@ createApp({
       this.rowData = { ...this.currentTableData.rows[this.selectedRowIndex] };
       this.rowErrors = [];
       this.rowError = '';
+      this.rowValidationMessage = '';
       
       // Convert values to strings for editing
       for (const col of this.currentTableData.schema) {
@@ -445,16 +448,120 @@ createApp({
       }
     },
     closeRowModal() {
+      // Don't close if there are validation errors - user needs to fix them
+      // This prevents accidental closing (click outside, X button) when errors exist
+      if (this.rowErrors.length > 0 || this.rowError) {
+        return;
+      }
       this.showRowModal = false;
       this.rowData = {};
       this.rowErrors = [];
       this.rowError = '';
+      this.rowValidationMessage = '';
+    },
+    cancelRowModal() {
+      // Always allow cancel - clear errors and close
+      this.rowErrors = [];
+      this.rowError = '';
+      this.rowValidationMessage = '';
+      this.showRowModal = false;
+      this.rowData = {};
+    },
+    async validateRow() {
+      if (!this.currentTableData || this.rowModalMode !== 'add') return;
+      
+      this.rowErrors = [];
+      this.rowError = '';
+      this.rowValidationMessage = '';
+      
+      // Convert row data to proper types
+      const processedRow = {};
+      for (const col of this.currentTableData.schema) {
+        let value = this.rowData[col.name] || '';
+        switch (col.type) {
+          case 'INT':
+            value = parseInt(value, 10);
+            if (isNaN(value)) {
+              this.rowErrors.push(col.name);
+              this.rowError = 'Invalid integer value';
+            }
+            break;
+          case 'REAL':
+            value = parseFloat(value);
+            if (isNaN(value)) {
+              this.rowErrors.push(col.name);
+              this.rowError = 'Invalid real value';
+            }
+            break;
+          default:
+            value = String(value);
+        }
+        processedRow[col.name] = value;
+      }
+      
+      if (this.rowErrors.length > 0) {
+        return;
+      }
+      
+      try {
+        const response = await fetch('/api/row/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tableName: this.currentTable,
+            row: processedRow
+          })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+          // All validations passed
+          this.rowValidationMessage = '✅ All validations passed!';
+          this.rowErrors = [];
+          this.rowError = '';
+          
+          // Update row data with FIXUP results (convert back to strings for display)
+          if (data.row) {
+            for (const col of this.currentTableData.schema) {
+              if (data.row[col.name] !== undefined) {
+                this.rowData[col.name] = String(data.row[col.name]);
+              }
+            }
+          }
+        } else {
+          // Validation failed
+          if (data.errors && data.errors.length > 0) {
+            this.rowErrors = data.errors;
+            const failedColumns = data.errors.join(', ');
+            this.rowError = `Validation failed for: ${failedColumns}`;
+            this.rowValidationMessage = `❌ Validation failed for ${data.errors.length} column(s)`;
+          } else {
+            this.rowError = data.error || 'Validation failed';
+            this.rowValidationMessage = `❌ ${this.rowError}`;
+          }
+          
+          // Still update row data with FIXUP results if available
+          if (data.row) {
+            for (const col of this.currentTableData.schema) {
+              if (data.row[col.name] !== undefined) {
+                this.rowData[col.name] = String(data.row[col.name]);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(`[FRONTEND] Validation error:`, error);
+        this.rowError = error.message || 'Failed to validate row';
+        this.rowValidationMessage = `❌ ${this.rowError}`;
+      }
     },
     async saveRow() {
       if (!this.currentTableData) return;
       
       this.rowErrors = [];
       this.rowError = '';
+      this.rowValidationMessage = '';
       
       // Convert row data to proper types
       const processedRow = {};
@@ -514,15 +621,21 @@ createApp({
             this.selectedRowIndex = null;
           }
         } else {
+          // Handle validation errors - keep modal open and show errors
           if (data.errors && data.errors.length > 0) {
             this.rowErrors = data.errors;
-            this.rowError = 'Validation errors occurred';
+            // Create a more descriptive error message listing the failed columns
+            const failedColumns = data.errors.join(', ');
+            this.rowError = `Validation failed for the following columns: ${failedColumns}. Please correct the values and try again.`;
           } else {
             this.rowError = data.error || 'Failed to save row';
           }
+          // Modal stays open - don't call closeRowModal()
         }
       } catch (error) {
-        this.rowError = error.message || 'Failed to save row';
+        // Network or parsing errors - keep modal open and show error
+        this.rowError = error.message || 'Failed to save row. Please check your connection and try again.';
+        // Modal stays open - don't call closeRowModal()
       }
     },
     async restart() {

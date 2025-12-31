@@ -1,6 +1,4 @@
 INIT Date TODAY()
-CHECK PIC PIC != 0 || Dual != 0
-CHECK PIC PIC > 0 && Dual > 0
 CHECK From !BLANK(From)
 CHECK To !BLANK(To)
 CHECK PIC PIC = 0
