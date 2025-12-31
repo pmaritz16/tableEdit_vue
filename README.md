@@ -484,14 +484,15 @@ Function arguments are passed as raw strings (not pre-evaluated). Functions hand
 Checks if a field is blank (empty, null, undefined, or 0).
 
 **Arguments:**
-- `field`: Field name (string) or value
+- `field`: Field name (string) or value (can be quoted with single or double quotes)
 
 **Returns:** `1` if blank, `0` if not blank
 
 **Behavior:**
-- If argument is quoted string, extracts content
-- If argument is field name, gets field value
-- If field not found, treats string as literal value
+- Strips quotes from quoted arguments (handles both single and double quotes)
+- Resolves unquoted strings as field names if they match a column name
+- Falls back to literal string if field not found
+- Checks if value is blank: empty string, null, undefined, or 0
 
 **Example:** `BLANK(Amount)` returns `1` if Amount is empty or 0
 
@@ -552,9 +553,14 @@ Returns current time in format `HH:MM:SS`.
 Returns the length of a string.
 
 **Arguments:**
-- `str`: String value or field name
+- `str`: String value or field name (can be quoted with single or double quotes)
 
 **Returns:** Number (string length)
+
+**Behavior:**
+- Strips quotes from quoted arguments (handles both single and double quotes)
+- Resolves unquoted strings as field names if they match a column name
+- Falls back to literal string if field not found
 
 **Example:** `LENGTH(Name)` returns length of Name field
 
@@ -565,12 +571,19 @@ Returns the length of a string.
 Concatenates two strings.
 
 **Arguments:**
-- `str1`: First string
-- `str2`: Second string
+- `str1`: First string (can be quoted with single or double quotes, or field name)
+- `str2`: Second string (can be quoted with single or double quotes, or field name)
 
 **Returns:** String (concatenated result)
 
-**Example:** `APPEND("Hello", "World")` returns `"HelloWorld"`
+**Behavior:**
+- Strips quotes from quoted arguments (handles both single and double quotes)
+- Resolves unquoted strings as field names if they match a column name
+- Falls back to literal string if field not found
+
+**Example:** 
+- `APPEND("Hello", "World")` returns `"HelloWorld"`
+- `APPEND('K', From)` returns `"KPAE"` if From field is "PAE"
 
 ---
 
@@ -579,9 +592,14 @@ Concatenates two strings.
 Converts string to uppercase.
 
 **Arguments:**
-- `str`: String value or field name
+- `str`: String value or field name (can be quoted with single or double quotes)
 
 **Returns:** String (uppercase)
+
+**Behavior:**
+- Strips quotes from quoted arguments (handles both single and double quotes)
+- Resolves unquoted strings as field names if they match a column name
+- Falls back to literal string if field not found
 
 **Example:** `UPPER(Name)` returns uppercase Name field
 
@@ -677,6 +695,30 @@ Sums values in a column from index `start` to `finish` (inclusive).
 **Example:** 
 - `SUM(Amount, 0, 10)` sums rows 0-10
 - `SUM(Amount, 0, NUM_ROWS()-1)` sums all rows
+
+---
+
+#### REPLACE(column1, regexp1, target1)
+
+Replaces text in a column using a regular expression pattern and inserts matches into a target template.
+
+**Arguments:**
+- `column1`: Name of column containing source text (field name resolved to value)
+- `regexp1`: Regular expression pattern (string, single or double quotes removed)
+- `target1`: Replacement template (string, single or double quotes removed)
+
+**Returns:** String (replaced text, or original if no match)
+
+**Behavior:**
+- Applies regex pattern to field value from current row
+- Replaces all matches (global flag) with target template
+- Supports replacement patterns: `$0` (full match), `$1`, `$2`, etc. (captured groups)
+- Returns original string if no match found
+- Returns empty string if regex pattern is invalid
+
+**Example:**
+- `REPLACE(Date, '(\d{2})/(\d{2})/(\d{4})', '$3-$2-$1')` converts "01/15/2024" to "2024-15-01"
+- `REPLACE(Text, 'old', 'new')` replaces all occurrences of "old" with "new"
 
 ---
 

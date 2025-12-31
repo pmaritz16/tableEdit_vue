@@ -424,23 +424,8 @@ class ExpressionEvaluator {
   _handleFunctions(expr) {
     const functions = {
       'BLANK': (field) => {
-        // Field can be a field name string or already evaluated value
-        let val;
-        if (typeof field === 'string') {
-          // If it's a quoted string, extract the content
-          if (field.startsWith('"') && field.endsWith('"')) {
-            val = field.slice(1, -1);
-          } else {
-            // Try to get field value by name
-            val = this._getFieldValue(field);
-            // If field not found, treat the string itself as the value
-            if (val === null) {
-              val = field;
-            }
-          }
-        } else {
-          val = field;
-        }
+        // Resolve field reference (strips quotes, resolves field names)
+        const val = this._resolveStringArg(field, true);
         // Check if blank: empty string, null, undefined, or 0
         const isBlank = (val === '' || val === null || val === undefined || val === 0);
         return isBlank ? 1 : 0;
@@ -463,79 +448,19 @@ class ExpressionEvaluator {
         return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`;
       },
       'LENGTH': (str) => {
-        // Resolve field reference if str is a field name
-        let val;
-        if (typeof str === 'string') {
-          // If it's a quoted string (single or double), extract the content
-          if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
-            val = str.slice(1, -1);
-          } else {
-            // Try to get field value by name
-            val = this._getFieldValue(str);
-            // If field not found, treat the string itself as the value
-            if (val === null) {
-              val = str;
-            }
-          }
-        } else {
-          val = str;
-        }
+        // Resolve string argument (strips quotes, resolves field names)
+        const val = this._resolveStringArg(str, true);
         return String(val).length;
       },
       'APPEND': (str1, str2) => {
-        // Resolve field references if arguments are field names
-        let val1, val2;
-        
-        // Resolve str1
-        if (typeof str1 === 'string') {
-          // Handle both single and double quotes
-          if ((str1.startsWith('"') && str1.endsWith('"')) || (str1.startsWith("'") && str1.endsWith("'"))) {
-            val1 = str1.slice(1, -1);
-          } else {
-            val1 = this._getFieldValue(str1);
-            if (val1 === null) {
-              val1 = str1;
-            }
-          }
-        } else {
-          val1 = str1;
-        }
-        
-        // Resolve str2
-        if (typeof str2 === 'string') {
-          // Handle both single and double quotes
-          if ((str2.startsWith('"') && str2.endsWith('"')) || (str2.startsWith("'") && str2.endsWith("'"))) {
-            val2 = str2.slice(1, -1);
-          } else {
-            val2 = this._getFieldValue(str2);
-            if (val2 === null) {
-              val2 = str2;
-            }
-          }
-        } else {
-          val2 = str2;
-        }
-        
+        // Resolve both string arguments (strips quotes, resolves field names)
+        const val1 = this._resolveStringArg(str1, true);
+        const val2 = this._resolveStringArg(str2, true);
         return String(val1) + String(val2);
       },
       'UPPER': (str) => {
-        // Resolve field reference if str is a field name
-        let val;
-        if (typeof str === 'string') {
-          // If it's a quoted string (single or double), extract the content
-          if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
-            val = str.slice(1, -1);
-          } else {
-            // Try to get field value by name
-            val = this._getFieldValue(str);
-            // If field not found, treat the string itself as the value
-            if (val === null) {
-              val = str;
-            }
-          }
-        } else {
-          val = str;
-        }
+        // Resolve string argument (strips quotes, resolves field names)
+        const val = this._resolveStringArg(str, true);
         return String(val).toUpperCase();
       },
       'TOTAL': (tableName, columnName) => {
@@ -667,39 +592,26 @@ class ExpressionEvaluator {
         // Returns 0 if start > finish or if indices are out of bounds
         // Throws error if attempting to sum a TEXT column
         
-        // Debug logging
-        console.log(`[SUM] Called with columnName=${JSON.stringify(columnName)}, start=${JSON.stringify(start)}, finish=${JSON.stringify(finish)}`);
-        console.log(`[SUM] currentTable=${this.currentTable}, row=${this.row ? 'present' : 'null'}`);
-        
         if (!this.currentTable) {
-          console.log(`[SUM] No currentTable, returning 0`);
           return 0;
         }
         
         const table = this.tables[this.currentTable];
         if (!table) {
-          console.log(`[SUM] Table ${this.currentTable} not found, returning 0`);
           return 0;
         }
         
-        console.log(`[SUM] Table found with ${table.rows.length} rows, schema:`, table.schema.map(c => `${c.name}:${c.type}`).join(', '));
-        
         // Remove quotes if present from column name
         const cleanColumnName = typeof columnName === 'string' ? columnName.replace(/^"|"$/g, '') : String(columnName);
-        console.log(`[SUM] Clean column name: ${cleanColumnName}`);
         
         // Find the column
         const col = table.schema.find(c => c.name === cleanColumnName);
         if (!col) {
-          console.log(`[SUM] Column ${cleanColumnName} not found in schema, returning 0`);
           return 0;
         }
         
-        console.log(`[SUM] Column found: ${col.name}, type: ${col.type}`);
-        
         // Check if column is TEXT - throw error if so
         if (col.type === 'TEXT') {
-          console.log(`[SUM] ERROR: Cannot sum TEXT column: ${cleanColumnName}`);
           throw new Error(`Cannot sum TEXT column: ${cleanColumnName}`);
         }
         
@@ -711,116 +623,87 @@ class ExpressionEvaluator {
         if (typeof start === 'string') {
           // Remove quotes if present
           const startExpr = start.replace(/^"|"$/g, '');
-          console.log(`[SUM] Start is string: "${startExpr}"`);
           
           // Check if it's a simple number first (for performance and correctness)
           const directParse = parseFloat(startExpr);
           if (!isNaN(directParse) && isFinite(directParse) && String(directParse) === startExpr.trim()) {
             // It's a simple number, use it directly
             startValue = directParse;
-            console.log(`[SUM] Start is simple number: ${startValue}`);
           } else {
             // It's an expression, evaluate it
             try {
-              console.log(`[SUM] Evaluating start expression: ${startExpr}`);
               const tempEvaluator = new ExpressionEvaluator(this.row, this.tables, this.currentTable);
               const evaluated = tempEvaluator.evaluate(startExpr);
-              console.log(`[SUM] Start expression evaluated to: ${evaluated} (type: ${typeof evaluated})`);
               // Convert result to number
               startValue = typeof evaluated === 'string' ? parseFloat(evaluated.replace(/^"|"$/g, '')) : parseFloat(evaluated);
-              console.log(`[SUM] Start value after conversion: ${startValue}`);
             } catch (error) {
-              console.log(`[SUM] Error evaluating start expression: ${error.message}, trying direct parse`);
               // If evaluation fails, try parsing directly
               startValue = parseFloat(startExpr);
             }
           }
         } else {
           startValue = parseFloat(start);
-          console.log(`[SUM] Start is not string, parsed to: ${startValue}`);
         }
         
         if (typeof finish === 'string') {
           // Remove quotes if present
           const finishExpr = finish.replace(/^"|"$/g, '');
-          console.log(`[SUM] Finish is string: "${finishExpr}"`);
           
           // Check if it's a simple number first (for performance and correctness)
           const directParse = parseFloat(finishExpr);
           if (!isNaN(directParse) && isFinite(directParse) && String(directParse) === finishExpr.trim()) {
             // It's a simple number, use it directly
             finishValue = directParse;
-            console.log(`[SUM] Finish is simple number: ${finishValue}`);
           } else {
             // It's an expression, evaluate it
             try {
-              console.log(`[SUM] Evaluating finish expression: ${finishExpr}`);
               const tempEvaluator = new ExpressionEvaluator(this.row, this.tables, this.currentTable);
               const evaluated = tempEvaluator.evaluate(finishExpr);
-              console.log(`[SUM] Finish expression evaluated to: ${evaluated} (type: ${typeof evaluated})`);
               // Convert result to number
               finishValue = typeof evaluated === 'string' ? parseFloat(evaluated.replace(/^"|"$/g, '')) : parseFloat(evaluated);
-              console.log(`[SUM] Finish value after conversion: ${finishValue}`);
             } catch (error) {
-              console.log(`[SUM] Error evaluating finish expression: ${error.message}, trying direct parse`);
               // If evaluation fails, try parsing directly
               finishValue = parseFloat(finishExpr);
             }
           }
         } else {
           finishValue = parseFloat(finish);
-          console.log(`[SUM] Finish is not string, parsed to: ${finishValue}`);
         }
         
         // Parse start and finish indices
         const startIdx = Math.round(startValue);
         const finishIdx = Math.round(finishValue);
         
-        console.log(`[SUM] Final indices: startIdx=${startIdx}, finishIdx=${finishIdx}`);
-        
         // Check if indices are valid numbers
         if (isNaN(startIdx) || isNaN(finishIdx)) {
-          console.log(`[SUM] Invalid indices (NaN), returning 0`);
           return 0;
         }
         
         const numRows = table.rows.length;
-        console.log(`[SUM] Number of rows: ${numRows}`);
         
         // Return 0 if start > finish
         if (startIdx > finishIdx) {
-          console.log(`[SUM] startIdx (${startIdx}) > finishIdx (${finishIdx}), returning 0`);
           return 0;
         }
         
         // Return 0 if start or finish are out of bounds
         if (startIdx < 0 || startIdx >= numRows || finishIdx < 0 || finishIdx >= numRows) {
-          console.log(`[SUM] Indices out of bounds: startIdx=${startIdx}, finishIdx=${finishIdx}, numRows=${numRows}, returning 0`);
           return 0;
         }
         
         // Sum values from start to finish (inclusive)
         let total = 0;
-        console.log(`[SUM] Summing rows from ${startIdx} to ${finishIdx} (inclusive)`);
         for (let i = startIdx; i <= finishIdx; i++) {
           const row = table.rows[i];
           const value = row[cleanColumnName];
-          console.log(`[SUM] Row ${i}: value=${JSON.stringify(value)} (type: ${typeof value})`);
           if (value !== null && value !== undefined) {
             const num = parseFloat(value);
-            console.log(`[SUM] Row ${i}: parsed to ${num} (isNaN: ${isNaN(num)})`);
             if (!isNaN(num)) {
               total += num;
-              console.log(`[SUM] Row ${i}: added ${num}, total now: ${total}`);
-            } else {
-              console.log(`[SUM] Row ${i}: value is NaN, skipping`);
             }
-          } else {
-            console.log(`[SUM] Row ${i}: value is null/undefined, skipping`);
           }
         }
         
-        console.log(`[SUM] Final total: ${total}`);
         return total;
       },
       'REPLACE': (column1, regexp1, target1) => {
@@ -1191,6 +1074,41 @@ class ExpressionEvaluator {
       return this.row[fieldName];
     }
     return null;
+  }
+  
+  /**
+   * Resolves a string argument by stripping quotes and optionally resolving field references.
+   * Handles both single and double quotes. If the string is not quoted and resolveField is true,
+   * attempts to resolve it as a field name, falling back to the string itself if not found.
+   * 
+   * @param {string|*} arg - The argument to resolve
+   * @param {boolean} resolveField - If true, resolve unquoted strings as field names
+   * @returns {*} The resolved value (string if quoted, field value if resolved, original if not)
+   */
+  _resolveStringArg(arg, resolveField = true) {
+    if (typeof arg !== 'string') {
+      return arg;
+    }
+    
+    // Check if it's a quoted string (single or double quotes)
+    const isDoubleQuoted = arg.startsWith('"') && arg.endsWith('"');
+    const isSingleQuoted = arg.startsWith("'") && arg.endsWith("'");
+    
+    if (isDoubleQuoted || isSingleQuoted) {
+      // Extract content from quoted string
+      return arg.slice(1, -1);
+    }
+    
+    // If not quoted and resolveField is true, try to resolve as field name
+    if (resolveField) {
+      const fieldValue = this._getFieldValue(arg);
+      if (fieldValue !== null && fieldValue !== undefined) {
+        return fieldValue;
+      }
+    }
+    
+    // Return the string as-is if not quoted or field not found
+    return arg;
   }
   
   _handleStringLiterals(expr) {
