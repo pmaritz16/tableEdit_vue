@@ -1,14 +1,2 @@
-Aircraft & Aviation
-Amazon
-Computers & Software
-Subscriptions
-Entertainment
-Food, Dining, Clothing
-Health
-House & Real Estate
-Insurance
-Travel and Lodging
-Lufthansa
-Miscellaneous or Unknown
-Other Airlines
-Cars, Boats, Vehicles
+usa
+africa

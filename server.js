@@ -291,7 +291,7 @@ async function loadCSVFiles(resetTables = false) {
  * - Boolean operations (&&, ||, !)
  * - Comparisons (<, =, >, !=)
  * - Conditional expressions (condition ? trueValue : falseValue)
- * - Special functions (BLANK, TODAY, DAY, MONTH, YEAR, NOW, LENGTH, APPEND, UPPER, TOTAL, REGEXP, CURR_ROW, NUM_ROWS, SUM)
+ * - Special functions (BLANK, TODAY, DAY, MONTH, YEAR, NOW, LENGTH, APPEND, UPPER, TOTAL, REGEXP, CURR_ROW, NUM_ROWS, SUM, REPLACE)
  * - Field references and constants
  * 
  * @class ExpressionEvaluator
@@ -398,7 +398,27 @@ class ExpressionEvaluator {
     // Returns 1 if true, 0 if false
     // INT and REAL can be compared with each other, TEXT only with TEXT
     // Comparisons are processed AFTER arithmetic so expressions like "a < b - 1" work correctly
-    return this._handleComparisons(expr);
+    expr = this._handleComparisons(expr);
+    
+    // Final cleanup: strip quotes from simple quoted string results
+    // This handles cases where functions like REPLACE return quoted strings
+    if (typeof expr === 'string' && expr.startsWith('"') && expr.endsWith('"') && expr.length >= 2) {
+      // Only strip if it's a simple quoted string (no operators, no nested quotes)
+      const inner = expr.slice(1, -1);
+      // Check for operators that would indicate this is part of an expression
+      // Allow dashes in the middle (like dates), but not at start (unary minus) or with spaces (binary minus)
+      const hasOperator = inner.includes('"') || inner.includes("'") || 
+          inner.includes('=') || inner.includes('<') || inner.includes('>') || 
+          inner.includes('!') || inner.includes('+') || 
+          (inner.includes('-') && (inner.trim().startsWith('-') || /\s-\s/.test(inner))) ||
+          inner.includes('*') || inner.includes('/') || inner.includes('^') ||
+          inner.includes('?') || inner.includes(':');
+      if (!hasOperator) {
+        return inner;
+      }
+    }
+    
+    return expr;
   }
   
   _handleFunctions(expr) {
@@ -735,6 +755,79 @@ class ExpressionEvaluator {
         
         console.log(`[SUM] Final total: ${total}`);
         return total;
+      },
+      'REPLACE': (column1, regexp1, target1) => {
+        // Replaces text in column1 using regexp1 pattern and inserts matches into target1
+        // Uses $1, $2, ... convention for captured groups, $0 for full match
+        
+        if (!column1 || !regexp1 || !target1) {
+          return '';
+        }
+        
+        // Remove quotes from column name if present
+        const cleanColumnName = typeof column1 === 'string' ? column1.replace(/^"|"$/g, '').replace(/^'|'$/g, '') : String(column1);
+        
+        // Get the field value from the current row
+        const fieldValue = this._getFieldValue(cleanColumnName);
+        if (fieldValue === null || fieldValue === undefined) {
+          return '';
+        }
+        
+        // Convert field value to string
+        const sourceStr = typeof fieldValue === 'string' ? fieldValue : String(fieldValue);
+        
+        // Remove quotes from regex pattern if present (handle both single and double quotes)
+        let cleanPattern = typeof regexp1 === 'string' ? regexp1 : String(regexp1);
+        if ((cleanPattern.startsWith('"') && cleanPattern.endsWith('"')) ||
+            (cleanPattern.startsWith("'") && cleanPattern.endsWith("'"))) {
+          cleanPattern = cleanPattern.slice(1, -1);
+        }
+        
+        // Remove quotes from target string if present (handle both single and double quotes)
+        let cleanTarget = typeof target1 === 'string' ? target1 : String(target1);
+        if ((cleanTarget.startsWith('"') && cleanTarget.endsWith('"')) ||
+            (cleanTarget.startsWith("'") && cleanTarget.endsWith("'"))) {
+          cleanTarget = cleanTarget.slice(1, -1);
+        }
+        
+        try {
+          // Create regex with global flag to replace all matches
+          const regex = new RegExp(cleanPattern, 'g');
+          
+          // Replace all matches in source string with target template
+          const result = sourceStr.replace(regex, (match, ...groups) => {
+            // Start with the target template
+            let replacement = cleanTarget;
+            
+            // Replace $0 with full match
+            replacement = replacement.replace(/\$0/g, match || '');
+            
+            // Replace $1, $2, ... with captured groups
+            for (let i = 0; i < groups.length; i++) {
+              const groupValue = groups[i] || '';
+              const placeholder = `$${i + 1}`;
+              replacement = replacement.replace(new RegExp(`\\${placeholder}`, 'g'), groupValue);
+            }
+            
+            return replacement;
+          });
+          
+          // If no matches were found, return original string (not empty string)
+          // (replace doesn't change the string if no matches, so we need to check)
+          if (result === sourceStr) {
+            // Check if there was actually a match by doing a test match
+            const testRegex = new RegExp(cleanPattern);
+            if (!testRegex.test(sourceStr)) {
+              // No match found - return original string unchanged
+              return sourceStr;
+            }
+          }
+          
+          return result;
+        } catch (error) {
+          // Invalid regex pattern, return empty string
+          return '';
+        }
       }
     };
     
@@ -1914,8 +2007,17 @@ async function collapseTable(tableName, columnName, newTableName) {
     }
     
     for (const col of intRealCols) {
-      const val = row[col.name] || 0;
-      groups[key][col.name] = (groups[key][col.name] || 0) + val;
+      const val = row[col.name];
+      // Convert to number before adding (like SUM function does)
+      // This prevents string concatenation issues
+      if (val !== null && val !== undefined) {
+        const num = parseFloat(val);
+        if (!isNaN(num)) {
+          groups[key][col.name] = (groups[key][col.name] || 0) + num;
+        }
+        // If value is NaN, skip it (don't add anything)
+      }
+      // If value is null/undefined, skip it (don't add anything)
     }
   }
   
@@ -2213,9 +2315,23 @@ async function sortTable(tableName, columnName, order) {
     
     let comparison = 0;
     if (col.type === 'TEXT') {
-      comparison = String(aVal).localeCompare(String(bVal));
+      comparison = String(aVal || '').localeCompare(String(bVal || ''));
     } else {
-      comparison = (aVal || 0) - (bVal || 0);
+      // For INT and REAL columns, convert to numbers for proper numeric comparison
+      // This handles cases where values might be stored as strings
+      const aNum = (aVal !== null && aVal !== undefined) ? parseFloat(aVal) : 0;
+      const bNum = (bVal !== null && bVal !== undefined) ? parseFloat(bVal) : 0;
+      
+      // Handle NaN cases (invalid numbers)
+      if (isNaN(aNum) && isNaN(bNum)) {
+        comparison = 0;
+      } else if (isNaN(aNum)) {
+        comparison = 1; // NaN values go to end
+      } else if (isNaN(bNum)) {
+        comparison = -1; // NaN values go to end
+      } else {
+        comparison = aNum - bNum;
+      }
     }
     
     return order === 'desc' ? -comparison : comparison;
@@ -2306,8 +2422,17 @@ async function groupTable(tableName, groupColumn, columns, newTableName) {
     
     // Sum the specified columns
     for (const col of sumCols) {
-      const val = row[col.name] || 0;
-      groups[key].sums[col.name] = (groups[key].sums[col.name] || 0) + val;
+      const val = row[col.name];
+      // Convert to number before adding (like SUM function does)
+      // This prevents string concatenation issues
+      if (val !== null && val !== undefined) {
+        const num = parseFloat(val);
+        if (!isNaN(num)) {
+          groups[key].sums[col.name] = (groups[key].sums[col.name] || 0) + num;
+        }
+        // If value is NaN, skip it (don't add anything)
+      }
+      // If value is null/undefined, skip it (don't add anything)
     }
   }
   

@@ -1,1 +1,0 @@
-Aircraft & Aviation; Amazon;Computers & Software; Subscriptions; Entertainment; Food Drink & Dining; Clothing; Health; House & Real Estate; Insurance;Travel and Lodging; Lufthansa; Miscellaneous or Unknown; Other Airlines;Cars & Boats & Vehicles

@@ -1,6 +1,0 @@
-REGEXP('^ALASKA',Payee) != '' ? 'Other Airline' : tag
-REGEXP('Total',Payee) != '' ? SUM(Amount,0,NUM_ROWS()-2) : Amount
-CURR_ROW() = NUM_ROWS()-1 ? SUM(Amount,0,NUM_ROWS()-1) : 0
-CURR_ROW() = NUM_ROWS()-1 ? SUM(Amount,0,NUM_ROWS()-2) : 0
-REGEXP('Total',Payee) != '' ? 1 : 0
-REGEXP('METROP',Payee)
