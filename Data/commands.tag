@@ -1,13 +1,14 @@
-Aircraft
+Aircraft & Aviation
 Amazon
 Computers & Software
-Entertainment & Education
+Subscriptions
+Entertainment
 Food, Dining, Clothing
 Health
-House
+House & Real Estate
 Insurance
-Lodging
+Travel and Lodging
 Lufthansa
-Miscellaneous
-Other Airline
-Vehicle
+Miscellaneous or Unknown
+Other Airlines
+Cars, Boats, Vehicles
