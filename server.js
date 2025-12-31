@@ -308,10 +308,110 @@ class ExpressionEvaluator {
       throw new Error('Empty expression');
     }
     
+    const trimmedExpr = expression.trim();
+    
+    // Validate syntax before evaluation
+    this._validateSyntax(trimmedExpr);
+    
     try {
-      return this._evaluateExpression(expression.trim());
+      return this._evaluateExpression(trimmedExpr);
     } catch (error) {
+      // If it's already a well-formed error, re-throw it
+      if (error.message.includes('Syntax error') || 
+          error.message.includes('Type mismatch') ||
+          error.message.includes('Expression evaluation error')) {
+        throw error;
+      }
+      // Otherwise, wrap it with context
       throw new Error(`Expression evaluation error: ${error.message}`);
+    }
+  }
+  
+  /**
+   * Validates expression syntax for common errors.
+   * @param {string} expr - The expression to validate
+   * @throws {Error} If syntax errors are detected
+   */
+  _validateSyntax(expr) {
+    // Check for unmatched quotes (single or double)
+    let singleQuoteCount = 0;
+    let doubleQuoteCount = 0;
+    let inSingleQuote = false;
+    let inDoubleQuote = false;
+    let escapeNext = false;
+    
+    for (let i = 0; i < expr.length; i++) {
+      const char = expr[i];
+      
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+      
+      if (char === "'" && !inDoubleQuote) {
+        inSingleQuote = !inSingleQuote;
+        singleQuoteCount++;
+      } else if (char === '"' && !inSingleQuote) {
+        inDoubleQuote = !inDoubleQuote;
+        doubleQuoteCount++;
+      }
+    }
+    
+    if (inSingleQuote) {
+      throw new Error(`Syntax error: Unmatched single quote (') in expression`);
+    }
+    if (inDoubleQuote) {
+      throw new Error(`Syntax error: Unmatched double quote (") in expression`);
+    }
+    
+    // Check for invalid operator sequences
+    const invalidPatterns = [
+      /\*\s*\*/g,      // ** (should be ^)
+      /\/\s*\//g,      // //
+      /\+\s*\+/g,      // ++
+      /\-\s*\-/g,      // -- (unless it's a number)
+      /\^\s*\^/g,      // ^^
+      /&&\s*&&/g,      // &&&&
+      /\|\|\s*\|\|/g,  // ||||
+      /!\s*!/g,        // !!
+      /=\s*=/g,        // == (should be =)
+      /!\s*=/g,        // != (this is valid, but check spacing)
+    ];
+    
+    for (const pattern of invalidPatterns) {
+      if (pattern.test(expr)) {
+        throw new Error(`Syntax error: Invalid operator sequence in expression`);
+      }
+    }
+    
+    // Check for invalid characters (basic check - allow alphanumeric, operators, quotes, spaces, parentheses, brackets)
+    const validCharPattern = /[A-Za-z0-9\s\+\-\*\/\^\(\)\[\]=\<\>!&|?:"'.,]/;
+    for (let i = 0; i < expr.length; i++) {
+      const char = expr[i];
+      // Skip escaped characters
+      if (i > 0 && expr[i - 1] === '\\') continue;
+      // Allow valid characters
+      if (validCharPattern.test(char)) continue;
+      // If we get here, it's an invalid character
+      throw new Error(`Syntax error: Invalid character '${char}' at position ${i + 1} in expression`);
+    }
+    
+    // Check for conditional operator syntax errors
+    const questionCount = (expr.match(/\?/g) || []).length;
+    const colonCount = (expr.match(/:/g) || []).length;
+    // Colons can appear in time strings, so we need a more sophisticated check
+    // But if there are ? without matching :, that's an error
+    if (questionCount > 0 && colonCount < questionCount) {
+      // Check if colons are part of conditional operators (not time strings)
+      const conditionalColons = (expr.match(/\?\s*[^:]*:/g) || []).length;
+      if (conditionalColons < questionCount) {
+        throw new Error(`Syntax error: Mismatched conditional operator (? :). Found ${questionCount} '?' but only ${conditionalColons} matching ':'`);
+      }
     }
   }
   
@@ -371,7 +471,7 @@ class ExpressionEvaluator {
     }
     
     if (depth !== 0) {
-      throw new Error('Mismatched parentheses');
+      throw new Error(`Syntax error: Mismatched parentheses - ${depth > 0 ? 'missing closing' : 'extra closing'} parenthesis`);
     }
     
     // Handle field references (replace column names with their values)
@@ -1288,12 +1388,16 @@ class ExpressionEvaluator {
     
     // If one is quoted and one is not, and they're not both numeric, that's a type mismatch
     if (leftIsString !== rightIsString) {
-      throw new Error(`Type mismatch: cannot compare ${leftIsString ? 'TEXT' : 'numeric'} with ${rightIsString ? 'TEXT' : 'numeric'}`);
+      const leftDisplay = leftIsString ? `"${leftStr.slice(1, -1)}"` : leftStr;
+      const rightDisplay = rightIsString ? `"${rightStr.slice(1, -1)}"` : rightStr;
+      throw new Error(`Type mismatch: cannot compare ${leftIsString ? 'TEXT' : 'numeric'} value ${leftDisplay} with ${rightIsString ? 'TEXT' : 'numeric'} value ${rightDisplay} using operator '${operator}'`);
     }
     
     // One is numeric, one is not - this is an error
     if (leftIsNumeric || rightIsNumeric) {
-      throw new Error(`Type mismatch: cannot compare ${leftIsNumeric ? 'numeric' : 'TEXT'} with ${rightIsNumeric ? 'numeric' : 'TEXT'}`);
+      const leftDisplay = leftIsString ? `"${leftStr.slice(1, -1)}"` : leftStr;
+      const rightDisplay = rightIsString ? `"${rightStr.slice(1, -1)}"` : rightStr;
+      throw new Error(`Type mismatch: cannot compare ${leftIsNumeric ? 'numeric' : 'TEXT'} value ${leftDisplay} with ${rightIsNumeric ? 'numeric' : 'TEXT'} value ${rightDisplay} using operator '${operator}'`);
     }
     
     // Neither is numeric and neither is quoted - treat as TEXT comparison
@@ -1366,7 +1470,7 @@ class ExpressionEvaluator {
             // It's a number (may be negative)
             const num = parseFloat(value);
             if (isNaN(num)) {
-              throw new Error(`Cannot apply unary minus to non-numeric value: ${value}`);
+              throw new Error(`Type mismatch: Cannot apply unary minus (-) to non-numeric value: ${value}`);
             }
             negatedValue = -num;
           }
@@ -1933,6 +2037,11 @@ async function deleteRow(tableName, expression) {
       }
       // If numResult is non-zero, the row is deleted (not added to filteredRows)
     } catch (error) {
+      // Halt execution on syntax or type errors
+      return { 
+        success: false, 
+        error: `Error evaluating expression at row ${filteredRows.length + 1}: ${error.message}` 
+      };
       // If evaluation fails, keep the row (don't delete on error)
       await logError(`Error evaluating DELETE_ROWS expression for row`, error);
       filteredRows.push(row);
@@ -2085,10 +2194,21 @@ async function addColumn(tableName, columnName, expression, columnType) {
   
   // Evaluate expression for each row
   const evaluator = new ExpressionEvaluator(null, tables, tableName);
-  for (const row of table.rows) {
-    evaluator.row = row;
-    const value = evaluator.evaluate(expression);
-    row[columnName] = value;
+  let rowIndex = 0;
+  try {
+    for (const row of table.rows) {
+      evaluator.row = row;
+      const value = evaluator.evaluate(expression);
+      row[columnName] = value;
+      rowIndex++;
+    }
+  } catch (error) {
+    // Halt execution: remove the column we just added and return error
+    table.schema.pop();
+    return { 
+      success: false, 
+      error: `Error evaluating expression at row ${rowIndex + 1}: ${error.message}` 
+    };
   }
   
   return { success: true, table: serializeTable(table) };
@@ -2126,10 +2246,20 @@ async function setValue(tableName, columnName, expression) {
   
   // Evaluate expression for each row
   const evaluator = new ExpressionEvaluator(null, tables, tableName);
-  for (const row of table.rows) {
-    evaluator.row = row;
-    const value = evaluator.evaluate(expression);
-    row[columnName] = value;
+  let rowIndex = 0;
+  try {
+    for (const row of table.rows) {
+      evaluator.row = row;
+      const value = evaluator.evaluate(expression);
+      row[columnName] = value;
+      rowIndex++;
+    }
+  } catch (error) {
+    // Halt execution and return error with context
+    return { 
+      success: false, 
+      error: `Error evaluating expression at row ${rowIndex + 1}: ${error.message}` 
+    };
   }
   
   await logAction(`Set values for column ${columnName} in table ${tableName} using expression: ${expression}`);
@@ -2894,8 +3024,16 @@ app.get('/api/row/init/:tableName', async (req, res) => {
         await logAction(`INIT rule result: ${rule.columnName} = ${value}`);
         row[rule.columnName] = value;
       } catch (error) {
+        // For syntax/type errors, halt execution and return error
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          await logError(`Failed to execute INIT rule for ${rule.columnName}`, error);
+          return res.status(400).json({ 
+            success: false, 
+            error: `INIT rule error for column ${rule.columnName}: ${error.message}` 
+          });
+        }
         await logError(`Failed to execute INIT rule for ${rule.columnName}`, error);
-        // Continue with other rules
+        // Continue with other rules for non-syntax/type errors
       }
     }
     
@@ -2974,7 +3112,12 @@ app.post('/api/row/add', async (req, res) => {
         const value = evaluator.evaluate(rule.expression);
         row[rule.columnName] = value;
       } catch (error) {
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
@@ -2997,7 +3140,12 @@ app.post('/api/row/add', async (req, res) => {
         }
       } catch (error) {
         await logError(`CHECK rule error for ${rule.columnName}`, error);
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
@@ -3085,7 +3233,12 @@ app.post('/api/row/validate', async (req, res) => {
         const value = evaluator.evaluate(rule.expression);
         rowCopy[rule.columnName] = value;
       } catch (error) {
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
@@ -3101,7 +3254,12 @@ app.post('/api/row/validate', async (req, res) => {
           errors.push(rule.columnName);
         }
       } catch (error) {
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
@@ -3169,7 +3327,12 @@ app.post('/api/row/update', async (req, res) => {
         const value = evaluator.evaluate(rule.expression);
         row[rule.columnName] = value;
       } catch (error) {
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
@@ -3185,7 +3348,12 @@ app.post('/api/row/update', async (req, res) => {
           errors.push(rule.columnName);
         }
       } catch (error) {
-        errors.push(rule.columnName);
+        // For syntax/type errors, add detailed error message
+        if (error.message.includes('Syntax error') || error.message.includes('Type mismatch')) {
+          errors.push(`${rule.columnName}: ${error.message}`);
+        } else {
+          errors.push(rule.columnName);
+        }
       }
     }
     
