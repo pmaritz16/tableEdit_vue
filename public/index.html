@@ -93,6 +93,22 @@
       flex-direction: column;
     }
     
+    .table-header-info {
+      padding: 0.25rem 0.75rem;
+      background-color: #34495e;
+      color: white;
+      font-size: 0.85rem;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    
+    .row-count-badge {
+      display: inline-block;
+      padding: 0.15rem 0.5rem;
+      background-color: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+    
     .table-scrollbar-top {
       overflow-x: auto;
       overflow-y: hidden;
@@ -344,6 +360,11 @@
       background-color: #f0f0f0;
     }
     
+    .tag-menu-item-selected {
+      background-color: #3498db !important;
+      color: white;
+    }
+    
     .tag-menu-item:last-child {
       border-bottom: none;
     }
@@ -397,6 +418,9 @@
     </div>
     
     <div class="table-container" v-if="currentTableData">
+      <div class="table-header-info">
+        <span class="row-count-badge">{{ currentTableData.rows.length }} row{{ currentTableData.rows.length !== 1 ? 's' : '' }}</span>
+      </div>
       <div class="table-scrollbar-top" ref="topScrollbar" @scroll="syncScrollTop">
         <div :style="{ width: tableWidth + 'px', height: '1px' }"></div>
       </div>
@@ -670,11 +694,18 @@
          :style="{ left: tagMenuPosition.x + 'px', top: tagMenuPosition.y + 'px' }">
       <div v-if="tags.length === 0" class="tag-menu-empty">No tags available</div>
       <div v-else>
-        <div v-for="tag in tags" 
+        <div v-if="tagFilter" class="tag-menu-filter" style="padding: 4px 8px; font-size: 0.8rem; color: #666; border-bottom: 1px solid #eee;">
+          Filter: {{ tagFilter }}
+        </div>
+        <div v-for="(tag, index) in getFilteredTags()" 
              :key="tag" 
              class="tag-menu-item" 
+             :class="{ 'tag-menu-item-selected': index === selectedTagIndex }"
              @click="selectTag(tag)">
           {{ tag }}
+        </div>
+        <div v-if="getFilteredTags().length === 0" class="tag-menu-empty" style="padding: 8px 12px;">
+          No tags match "{{ tagFilter }}"
         </div>
       </div>
     </div>

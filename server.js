@@ -370,33 +370,107 @@ class ExpressionEvaluator {
     }
     
     // Check for invalid operator sequences
+    // Note: We need to check these patterns while ignoring content inside quoted strings
     const invalidPatterns = [
-      /\*\s*\*/g,      // ** (should be ^)
-      /\/\s*\//g,      // //
-      /\+\s*\+/g,      // ++
-      /\-\s*\-/g,      // -- (unless it's a number)
-      /\^\s*\^/g,      // ^^
-      /&&\s*&&/g,      // &&&&
-      /\|\|\s*\|\|/g,  // ||||
-      /!\s*!/g,        // !!
-      /=\s*=/g,        // == (should be =)
-      /!\s*=/g,        // != (this is valid, but check spacing)
+      { pattern: /\*\s*\*/g, desc: '** (should be ^)' },
+      { pattern: /\/\s*\//g, desc: '//' },
+      { pattern: /\+\s*\+/g, desc: '++' },
+      { pattern: /\-\s*\-/g, desc: '--' },
+      { pattern: /\^\s*\^/g, desc: '^^' },
+      { pattern: /&&\s*&&/g, desc: '&&&&' },
+      { pattern: /\|\|\s*\|\|/g, desc: '||||' },
+      { pattern: /!\s*!/g, desc: '!!' },
+      { pattern: /=\s*=/g, desc: '== (should be =)' },
     ];
     
-    for (const pattern of invalidPatterns) {
-      if (pattern.test(expr)) {
-        throw new Error(`Syntax error: Invalid operator sequence in expression`);
+    // Check invalid patterns, but only outside of quoted strings
+    inSingleQuote = false;
+    inDoubleQuote = false;
+    escapeNext = false;
+    
+    for (const { pattern, desc } of invalidPatterns) {
+      // Reset regex lastIndex to avoid issues with global regex
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(expr)) !== null) {
+        // Check if this match is inside a quoted string
+        const matchStart = match.index;
+        
+        // Determine if match is inside quotes by checking quote state at match position
+        let inQuote = false;
+        let checkInSingleQuote = false;
+        let checkInDoubleQuote = false;
+        let checkEscapeNext = false;
+        
+        for (let i = 0; i < matchStart; i++) {
+          const char = expr[i];
+          
+          if (checkEscapeNext) {
+            checkEscapeNext = false;
+            continue;
+          }
+          
+          if (char === '\\') {
+            checkEscapeNext = true;
+            continue;
+          }
+          
+          if (char === "'" && !checkInDoubleQuote) {
+            checkInSingleQuote = !checkInSingleQuote;
+          } else if (char === '"' && !checkInSingleQuote) {
+            checkInDoubleQuote = !checkInDoubleQuote;
+          }
+        }
+        
+        // Check if we're in a quote at the match position
+        inQuote = checkInSingleQuote || checkInDoubleQuote;
+        
+        // Only throw error if match is NOT inside quotes
+        if (!inQuote) {
+          throw new Error(`Syntax error: Invalid operator sequence (${desc}) in expression`);
+        }
       }
     }
     
-    // Check for invalid characters (basic check - allow alphanumeric, operators, quotes, spaces, parentheses, brackets)
-    const validCharPattern = /[A-Za-z0-9\s\+\-\*\/\^\(\)\[\]=\<\>!&|?:"'.,]/;
+    // Check for invalid characters (basic check - allow alphanumeric, operators, quotes, spaces, parentheses, brackets, underscores)
+    // But skip characters inside quoted strings
+    const validCharPattern = /[A-Za-z0-9\s\+\-\*\/\^\(\)\[\]=\<\>!&|?:"'.,_]/;
+    inSingleQuote = false;
+    inDoubleQuote = false;
+    escapeNext = false;
+    
     for (let i = 0; i < expr.length; i++) {
       const char = expr[i];
+      
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      
+      if (char === '\\') {
+        escapeNext = true;
+        continue;
+      }
+      
+      if (char === "'" && !inDoubleQuote) {
+        inSingleQuote = !inSingleQuote;
+        continue; // Don't validate the quote character itself
+      } else if (char === '"' && !inSingleQuote) {
+        inDoubleQuote = !inDoubleQuote;
+        continue; // Don't validate the quote character itself
+      }
+      
+      // Skip validation for characters inside quoted strings
+      if (inSingleQuote || inDoubleQuote) {
+        continue;
+      }
+      
       // Skip escaped characters
       if (i > 0 && expr[i - 1] === '\\') continue;
+      
       // Allow valid characters
       if (validCharPattern.test(char)) continue;
+      
       // If we get here, it's an invalid character
       throw new Error(`Syntax error: Invalid character '${char}' at position ${i + 1} in expression`);
     }

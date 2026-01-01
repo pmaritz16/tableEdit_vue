@@ -25,6 +25,8 @@ createApp({
       showTagMenu: false,
       tagMenuRowIndex: null,
       tagMenuPosition: { x: 0, y: 0 },
+      tagFilter: '',
+      selectedTagIndex: 0,
       commands: [
         'ADD_COLUMN',
         'COLLAPSE_TABLE',
@@ -108,6 +110,42 @@ createApp({
     document.addEventListener('click', (e) => {
       if (this.showTagMenu && !e.target.closest('.tag-menu')) {
         this.showTagMenu = false;
+        this.tagMenuRowIndex = null;
+        this.tagFilter = '';
+        this.selectedTagIndex = 0;
+      }
+    });
+    
+    // Handle keyboard input for tag menu
+    document.addEventListener('keydown', (e) => {
+      if (this.showTagMenu) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const filteredTags = this.getFilteredTags();
+          if (filteredTags.length > 0 && this.selectedTagIndex < filteredTags.length) {
+            this.selectTag(filteredTags[this.selectedTagIndex]);
+          }
+        } else if (e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key)) {
+          e.preventDefault();
+          this.tagFilter += e.key.toLowerCase();
+          // Reset selection to first match
+          this.selectedTagIndex = 0;
+          // Auto-select if filter matches exactly one tag
+          const filteredTags = this.getFilteredTags();
+          if (filteredTags.length === 1) {
+            this.selectedTagIndex = 0;
+          }
+        } else if (e.key === 'Backspace') {
+          e.preventDefault();
+          this.tagFilter = this.tagFilter.slice(0, -1);
+          this.selectedTagIndex = 0;
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          this.showTagMenu = false;
+          this.tagMenuRowIndex = null;
+          this.tagFilter = '';
+          this.selectedTagIndex = 0;
+        }
       }
     });
   },
@@ -794,6 +832,8 @@ createApp({
       this.tagMenuRowIndex = rowIndex;
       this.tagMenuPosition = { x: event.clientX, y: event.clientY };
       this.showTagMenu = true;
+      this.tagFilter = '';
+      this.selectedTagIndex = 0;
     },
     async selectTag(tag) {
       if (this.tagMenuRowIndex === null || !this.currentTable) {
@@ -827,6 +867,17 @@ createApp({
       
       this.showTagMenu = false;
       this.tagMenuRowIndex = null;
+      this.tagFilter = '';
+      this.selectedTagIndex = 0;
+    },
+    getFilteredTags() {
+      if (!this.tagFilter) {
+        return this.tags;
+      }
+      const filter = this.tagFilter.toLowerCase();
+      return this.tags.filter(tag => 
+        tag.toLowerCase().startsWith(filter)
+      );
     }
   }
 }).mount('#app');

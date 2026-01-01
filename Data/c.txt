@@ -1,0 +1,1 @@
+REGEXP('^EXPEDIA', Payee) != '' ? 'Lodging' : tag
