@@ -5,6 +5,7 @@ BnB
 Cable
 Cars_Boats
 Computers_Software
+Debbie
 Delta
 Entertainment
 Food_Dining
@@ -12,10 +13,12 @@ Health
 House & Real Estate
 Innoventix
 Insurance
+Legal_Admin
 Lodging
 Lufthansa
+Mark-etc.
 Miscellaneous_Unknown
-Philanthropy_Yaffa
+Philanthropy_Paul
 Philanthropy_Yaffa
 Phones
 Other_Airline
@@ -23,5 +26,3 @@ Ryan
 Subscriptions
 Tax
 Transportation
-
-

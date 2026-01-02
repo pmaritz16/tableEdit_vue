@@ -1,2 +1,4 @@
 REGEXP('^EXPEDIA', Payee) != '' ? 'Lodging' : tag
 Amount < 50 ? 'Miscellaneous_Unknown' : tag
+REGEXP('.*PAYPAL', Description) != ''
+Amount < 0 || Amount = 0

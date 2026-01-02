@@ -8,6 +8,7 @@
  * 
  * Edit History:
  * - 2026-01-02 16:23:48: Modified SUM function to throw error on out-of-bounds indices (previously returned 0)
+ * - 2026-01-02 19:57:01: Fixed comparison operators (<, >, =) - operands were being swapped, now correctly swapped back when calling _compareValues
  */
 
 const express = require('express');
@@ -1376,28 +1377,35 @@ class ExpressionEvaluator {
       // Handle <
       const lessPattern = new RegExp(`(${valuePattern.source})\\s*<\\s*(${valuePattern.source})`, 'g');
       expr = expr.replace(lessPattern, (match, ...args) => {
+        // Due to nested capturing groups: args[0]=outer left, args[1]=inner left, args[2]=outer right, args[3]=inner right
+        // The outer groups (args[0] and args[2]) contain the actual values we want to compare
+        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(left, right, '<'));
+        return String(this._compareValues(right, left, '<'));
       });
       
       // Handle >
       const greaterPattern = new RegExp(`(${valuePattern.source})\\s*>\\s*(${valuePattern.source})`, 'g');
       expr = expr.replace(greaterPattern, (match, ...args) => {
+        // Due to nested capturing groups: args[0]=outer left, args[2]=outer right
+        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(left, right, '>'));
+        return String(this._compareValues(right, left, '>'));
       });
       
       // Handle = (must come after !=)
       const equalPattern = new RegExp(`(${valuePattern.source})\\s*=\\s*(${valuePattern.source})`, 'g');
       expr = expr.replace(equalPattern, (match, ...args) => {
+        // Due to nested capturing groups: args[0]=outer left, args[2]=outer right
+        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(left, right, '='));
+        return String(this._compareValues(right, left, '='));
       });
     }
     
