@@ -1,0 +1,3 @@
+- When making **any change** to a source file (e.g. `server.js`, `app.js`), include a comment at the **start of the file** that:
+  - Specifies the **date and time** of the change
+  - Provides a **short summary** explaining the reason for the change

@@ -5,6 +5,9 @@
  * data transformation, and rule-based operations.
  * 
  * @module server
+ * 
+ * Edit History:
+ * - 2026-01-02 16:23:48: Modified SUM function to throw error on out-of-bounds indices (previously returned 0)
  */
 
 const express = require('express');
@@ -763,7 +766,8 @@ class ExpressionEvaluator {
       },
       'SUM': (columnName, start, finish) => {
         // Sums values in a column from index start to finish (inclusive)
-        // Returns 0 if start > finish or if indices are out of bounds
+        // Returns 0 if start > finish
+        // Throws error if indices are out of bounds
         // Throws error if attempting to sum a TEXT column
         
         if (!this.currentTable) {
@@ -850,7 +854,7 @@ class ExpressionEvaluator {
         
         // Check if indices are valid numbers
         if (isNaN(startIdx) || isNaN(finishIdx)) {
-          return 0;
+          throw new Error(`SUM: Invalid index values (start: ${start}, finish: ${finish})`);
         }
         
         const numRows = table.rows.length;
@@ -860,9 +864,9 @@ class ExpressionEvaluator {
           return 0;
         }
         
-        // Return 0 if start or finish are out of bounds
+        // Throw error if start or finish are out of bounds
         if (startIdx < 0 || startIdx >= numRows || finishIdx < 0 || finishIdx >= numRows) {
-          return 0;
+          throw new Error(`SUM: Index out of bounds (start: ${startIdx}, finish: ${finishIdx}, table rows: ${numRows})`);
         }
         
         // Sum values from start to finish (inclusive)

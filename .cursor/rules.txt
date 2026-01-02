@@ -1,0 +1,3 @@
+when making change to any source file (e.g. server.js, app.js) include a comment at the
+start of the file that give the time and date of the change and a short summary of thereasons for
+the change.
