@@ -8,7 +8,8 @@
  * 
  * Edit History:
  * - 2026-01-02 16:23:48: Modified SUM function to throw error on out-of-bounds indices (previously returned 0)
- * - 2026-01-02 19:57:01: Fixed comparison operators (<, >, =) - operands were being swapped, now correctly swapped back when calling _compareValues
+ * - 2026-01-02 21:12:06: Verified comparison operators (<, >, =) - code is correct, operands are passed in correct order to _compareValues
+ * - 2026-01-02 21:20:05: Fixed operator precedence - moved comparison evaluation before boolean operations so expressions like "Amount < 0 || Amount = 0" work correctly
  */
 
 const express = require('express');
@@ -560,10 +561,6 @@ class ExpressionEvaluator {
     // Example: 'Hello' becomes "Hello" (converted to double quotes for consistency)
     expr = this._handleStringLiterals(expr);
     
-    // Handle boolean operations (!, &&, ||)
-    // Order: ! (NOT) first, then && (AND), then || (OR)
-    expr = this._handleBooleanOps(expr);
-    
     // Handle unary minus (-expression)
     expr = this._handleUnaryMinus(expr);
     
@@ -576,7 +573,13 @@ class ExpressionEvaluator {
     // Returns 1 if true, 0 if false
     // INT and REAL can be compared with each other, TEXT only with TEXT
     // Comparisons are processed AFTER arithmetic so expressions like "a < b - 1" work correctly
+    // Comparisons must be processed BEFORE boolean operations so expressions like "a < 0 || a = 0" work correctly
     expr = this._handleComparisons(expr);
+    
+    // Handle boolean operations (!, &&, ||)
+    // Order: ! (NOT) first, then && (AND), then || (OR)
+    // Boolean operations are processed AFTER comparisons for correct operator precedence
+    expr = this._handleBooleanOps(expr);
     
     // Final cleanup: strip quotes from simple quoted string results
     // This handles cases where functions like REPLACE return quoted strings
@@ -1379,33 +1382,30 @@ class ExpressionEvaluator {
       expr = expr.replace(lessPattern, (match, ...args) => {
         // Due to nested capturing groups: args[0]=outer left, args[1]=inner left, args[2]=outer right, args[3]=inner right
         // The outer groups (args[0] and args[2]) contain the actual values we want to compare
-        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(right, left, '<'));
+        return String(this._compareValues(left, right, '<'));
       });
       
       // Handle >
       const greaterPattern = new RegExp(`(${valuePattern.source})\\s*>\\s*(${valuePattern.source})`, 'g');
       expr = expr.replace(greaterPattern, (match, ...args) => {
         // Due to nested capturing groups: args[0]=outer left, args[2]=outer right
-        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(right, left, '>'));
+        return String(this._compareValues(left, right, '>'));
       });
       
       // Handle = (must come after !=)
       const equalPattern = new RegExp(`(${valuePattern.source})\\s*=\\s*(${valuePattern.source})`, 'g');
       expr = expr.replace(equalPattern, (match, ...args) => {
         // Due to nested capturing groups: args[0]=outer left, args[2]=outer right
-        // Fix: The operands were being swapped - swap them back when calling _compareValues
         const left = args[0];
         const right = args[2];
         changed = true;
-        return String(this._compareValues(right, left, '='));
+        return String(this._compareValues(left, right, '='));
       });
     }
     
